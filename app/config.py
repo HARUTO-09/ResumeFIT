@@ -1,0 +1,63 @@
+"""Settings read from environment variables (prefix RESUMEFIT_) or a .env file.
+
+Every limit and threshold in the PRD is a default here, so it can be changed
+without touching code. See .env.example.
+"""
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.params import MB, DocumentLimits, ScoringParams
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="RESUMEFIT_", env_file=".env", extra="ignore")
+
+    database_url: str = "sqlite:///./resumefit.db"
+
+    # "sentence-transformers" (real model) or "hashing" (no download; tests and CI)
+    embedding_backend: str = "sentence-transformers"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+
+    resume_max_mb: int = 5
+    resume_max_pages: int = 5
+    jd_max_mb: int = 5
+    jd_max_pages: int = 10
+    jd_min_chars: int = 200
+    jd_max_chars: int = 10_000
+
+    w_skill: float = 0.5
+    w_semantic: float = 0.5
+    strong_threshold: int = 70
+    partial_threshold: int = 45
+    synonym_threshold: float = 0.80
+    weak_section_threshold: float = 0.35
+
+    retention_days: int = 30
+    log_level: str = "INFO"
+
+    def limits(self) -> DocumentLimits:
+        return DocumentLimits(
+            resume_max_bytes=self.resume_max_mb * MB,
+            resume_max_pages=self.resume_max_pages,
+            jd_max_bytes=self.jd_max_mb * MB,
+            jd_max_pages=self.jd_max_pages,
+            jd_min_chars=self.jd_min_chars,
+            jd_max_chars=self.jd_max_chars,
+        )
+
+    def scoring(self) -> ScoringParams:
+        return ScoringParams(
+            w_skill=self.w_skill,
+            w_semantic=self.w_semantic,
+            strong_threshold=self.strong_threshold,
+            partial_threshold=self.partial_threshold,
+            synonym_threshold=self.synonym_threshold,
+            weak_section_threshold=self.weak_section_threshold,
+        )
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()

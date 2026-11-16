@@ -1,0 +1,3 @@
+resume_path,jd_path,label,split
+data/resume_01.pdf,data/jd_ai_engineer.txt,strong,dev
+data/resume_02.pdf,data/jd_ai_engineer.txt,weak,test

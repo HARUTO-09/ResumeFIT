@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# secrets and local data
+.env
+*.db
+
+# real resumes and JDs used for evaluation must never be committed
+eval/data/
+eval/labels.csv
+
+# hand-saved copies of files that now live in .github/ and .pre-commit-config.yaml
+Claude outputs/
