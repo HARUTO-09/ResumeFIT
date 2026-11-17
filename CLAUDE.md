@@ -92,7 +92,8 @@ All three are written. README.md has the architecture, API table and known limit
 - Free stack, all live since 17 Nov 2026: `web/` on Vercel Hobby
   (`https://resumefit-web.vercel.app`, root directory `web`, deploys from `main`), API on
   Render free (Docker, 512 MB, region virginia), Neon Postgres. Browser flow 21/21 on the
-  live site. CORS and Firebase Authorized domains include the Vercel domain. The Render
+  live site; the owner then used the live site and reported everything working (17 Nov,
+  late). CORS and Firebase Authorized domains include the Vercel domain. The Render
   API key cannot edit env vars (403); change them in the Render dashboard.
 - Render: service `srv-dbu8vuui0phs7394d830`, `https://resumefit-api-x93n.onrender.com`,
   workspace `tea-dbu8k9k9v7es73e1l8d0`, auto-deploys from `main`. Created through the
