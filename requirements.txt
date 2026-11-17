@@ -6,6 +6,7 @@ pydantic>=2.7
 pydantic-settings>=2.3
 pyjwt[crypto]>=2.8  # verifies Firebase ID tokens (RS256)
 sqlalchemy>=2.0
+psycopg[binary]>=3.2  # PostgreSQL driver (Neon in production); SQLite needs none
 pdfplumber>=0.11
 pypdf>=4.2
 python-docx>=1.1

@@ -19,9 +19,32 @@ from app.models import (
 )
 
 
+def normalise_database_url(database_url: str) -> str:
+    """Use the psycopg 3 driver for PostgreSQL URLs as hosts hand them out.
+
+    Neon and most hosts give `postgresql://...` or `postgres://...`; SQLAlchemy would
+    pick psycopg2 for the first and does not know the second.
+    """
+    for prefix in ("postgres://", "postgresql://"):
+        if database_url.startswith(prefix):
+            return "postgresql+psycopg://" + database_url[len(prefix) :]
+    return database_url
+
+
 def make_engine(database_url: str) -> Engine:
-    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-    return create_engine(database_url, connect_args=connect_args)
+    database_url = normalise_database_url(database_url)
+    if database_url.startswith("sqlite"):
+        return create_engine(database_url, connect_args={"check_same_thread": False})
+    # Serverless Postgres (Neon) suspends when idle and drops open connections:
+    # check each pooled connection before use and recycle old ones. Server-side
+    # prepared statements are off because Neon's "-pooler" endpoint is PgBouncer.
+    return create_engine(
+        database_url,
+        pool_pre_ping=True,
+        pool_recycle=300,
+        pool_size=5,
+        connect_args={"prepare_threshold": None},
+    )
 
 
 def _replace_password_users_table(engine: Engine) -> None:
@@ -46,9 +69,9 @@ def _replace_password_users_table(engine: Engine) -> None:
 
 
 def init_db(engine: Engine) -> sessionmaker[Session]:
-    # Tables are created directly. Phases 2 and 3 only added tables, so this also
-    # upgrades an older database. Move to Alembic migrations before the next
-    # change to an existing table, or before moving to PostgreSQL.
+    # Tables are created directly, on SQLite and on PostgreSQL alike. Phases 2 and 3
+    # only added tables, so this also upgrades an older database. Move to Alembic
+    # migrations before the next change to an existing table.
     _replace_password_users_table(engine)
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, expire_on_commit=False)

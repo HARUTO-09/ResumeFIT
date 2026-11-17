@@ -90,7 +90,14 @@ All three are written. README.md has the architecture, API table and known limit
   owner's), p50 1.5 s, p95 8.2 s. README Privacy and `web/config.js` name Google.
   Answers CSV in scratchpad `coach_answers_gemini.csv`. Ollama is no longer needed.
 - Planned free stack, not deployed: `web/` on Vercel Hobby, API on Hugging Face Spaces
-  (Docker, free CPU), Neon Postgres (needs `psycopg` added and a test run on Postgres).
+  (Docker, free CPU), Neon Postgres.
+- Neon: project shy-poetry-66901925, AWS us-east-1, only the Postgres service enabled.
+  Connection string is `NEON_DATABASE_URL` in `.env` (not read by the app; local runs stay
+  on SQLite). Set it as `RESUMEFIT_DATABASE_URL` in the host's secrets. Verified 17 Nov:
+  tables created, account flow 21/21 against it, no user rows left. The Wi-Fi router's DNS
+  (192.168.29.1) refuses `*.neon.tech` endpoint names; locally append
+  `&hostaddr=<IPv4 from 1.1.1.1>` to the URL. Node.js is not installed, so the Neon CLI
+  was not used.
 
 ## Do next, in order
 
