@@ -49,8 +49,17 @@ class CoachParams:
     # Passages less similar to the question than this are not used. Untuned;
     # the right value depends on the embedding model.
     min_similarity: float = 0.25
-    # About 200 to 300 tokens per chunk, with a small overlap.
+    # Guidance documents: about 200 to 300 tokens per chunk, with a small overlap.
     chunk_words: int = 180
     chunk_overlap_words: int = 30
+    # Resume and JD passages are about one bullet or sentence each, so a question
+    # about one fact matches that line instead of a whole section. On the draft
+    # eval set (17 Nov 2026) this took hit rate at 5 from 11/20 to 18/20.
+    document_chunk_words: int = 25
+    document_chunk_overlap_words: int = 5
+    # Keep a place for the best resume passage and the best JD passage when they
+    # clear the floor, so longer guidance passages cannot crowd out the student's
+    # own documents. With the small document chunks this gave 20/20 on the same set.
+    reserve_user_sources: bool = True
     question_min_chars: int = 5
     question_max_chars: int = 500

@@ -88,16 +88,11 @@ def add_analysis_chunks(
 
     Does not commit: the caller commits them together with the analysis row.
     """
+    words, overlap = params.document_chunk_words, params.document_chunk_overlap_words
     items = [
-        ("resume", section, text)
-        for section, text in resume_passages(
-            resume_text, params.chunk_words, params.chunk_overlap_words
-        )
+        ("resume", section, text) for section, text in resume_passages(resume_text, words, overlap)
     ]
-    items += [
-        ("jd", "job description", text)
-        for text in chunk_text(jd_text, params.chunk_words, params.chunk_overlap_words)
-    ]
+    items += [("jd", "job description", text) for text in chunk_text(jd_text, words, overlap)]
     vectors = embedder.encode([f"{label}\n{text}" for _, label, text in items])
     for ordinal, ((source, label, text), vector) in enumerate(zip(items, vectors, strict=True)):
         session.add(

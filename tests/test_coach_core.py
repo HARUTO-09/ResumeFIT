@@ -42,6 +42,19 @@ def test_resume_passages_are_redacted_and_labelled():
     assert "PyTorch" in joined
 
 
+def test_document_chunks_are_about_one_bullet_each():
+    params = CoachParams()
+    passages = resume_passages(
+        RESUME_TEXT, params.document_chunk_words, params.document_chunk_overlap_words
+    )
+    assert len(passages) > 4  # more than one passage per section
+    assert all(len(text.split()) <= params.document_chunk_words for _, text in passages)
+    # two facts from different bullets land in different passages
+    postgres = [text for _, text in passages if "PostgreSQL" in text]
+    pytest_ = [text for _, text in passages if "pytest" in text]
+    assert postgres and pytest_ and postgres != pytest_
+
+
 def test_resume_without_headings_still_gives_passages():
     passages = resume_passages("I know Python. Mail me at someone@example.com please.")
     assert passages[0][0] == "resume" and "someone@example.com" not in passages[0][1]
@@ -151,6 +164,60 @@ def test_retrieval_finds_the_relevant_guidance(corpus, embedder):
     assert len(hits) == 5
     assert [sim for _, sim in hits] == sorted((sim for _, sim in hits), reverse=True)
     assert "Showing deployment experience" in [p.label for p, _ in hits]
+
+
+class _FixedQuestionEmbedder:
+    """Encodes every text to the same unit vector, so passage vectors set the similarities."""
+
+    name = "fixed"
+
+    def encode(self, texts):
+        return np.array([[1.0, 0.0]] * len(texts), dtype=np.float32)
+
+
+def _reserved_corpus():
+    sims = {"G1": 0.9, "G2": 0.8, "G3": 0.7, "G4": 0.6, "G5": 0.55, "R1": 0.5, "J1": 0.4, "R2": 0.1}
+    source = {"G": "guidance", "R": "resume", "J": "jd"}
+    passages = [Passage(pid, source[pid[0]], pid, f"text {pid}") for pid in sims]
+    vectors = np.array([[s, 0.0] for s in sims.values()], dtype=np.float32)
+    return passages, vectors
+
+
+def test_reserved_sources_keep_a_place_for_their_best_passage():
+    passages, vectors = _reserved_corpus()
+    embedder = _FixedQuestionEmbedder()
+    plain = [p.id for p, _ in retrieve("q", passages, vectors, embedder, top_k=5)]
+    assert plain == ["G1", "G2", "G3", "G4", "G5"]
+
+    reserved = retrieve(
+        "q", passages, vectors, embedder, top_k=5, reserved_sources=("resume", "jd")
+    )
+    ids = [p.id for p, _ in reserved]
+    assert ids == ["G1", "G2", "G3", "R1", "J1"]  # best first, two weakest guidance dropped
+    assert [s for _, s in reserved] == sorted((s for _, s in reserved), reverse=True)
+
+    # a reserved source below the floor gets no place
+    floored = retrieve(
+        "q",
+        passages,
+        vectors,
+        embedder,
+        top_k=5,
+        min_similarity=0.45,
+        reserved_sources=("resume", "jd"),
+    )
+    assert [p.id for p, _ in floored] == ["G1", "G2", "G3", "G4", "R1"]
+
+    # nothing is dropped when there is room, and nothing is added twice
+    roomy = retrieve(
+        "q",
+        passages[:3] + passages[5:],
+        vectors[[0, 1, 2, 5, 6, 7]],
+        embedder,
+        top_k=5,
+        reserved_sources=("resume", "jd"),
+    )
+    assert [p.id for p, _ in roomy] == ["G1", "G2", "G3", "R1", "J1"]
 
 
 def test_retrieval_floor_and_empty_corpus(corpus, embedder):

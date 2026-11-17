@@ -20,6 +20,7 @@ What it reports
 
 import argparse
 import csv
+import dataclasses
 import json
 from pathlib import Path
 
@@ -39,16 +40,11 @@ NO_RETRIEVAL_SYSTEM = (
 
 
 def build_corpus(resume_text: str, jd_text: str, embedder, params):
+    words, overlap = params.document_chunk_words, params.document_chunk_overlap_words
     items = [
-        ("resume", section, text)
-        for section, text in resume_passages(
-            resume_text, params.chunk_words, params.chunk_overlap_words
-        )
+        ("resume", section, text) for section, text in resume_passages(resume_text, words, overlap)
     ]
-    items += [
-        ("jd", "job description", text)
-        for text in chunk_text(jd_text, params.chunk_words, params.chunk_overlap_words)
-    ]
+    items += [("jd", "job description", text) for text in chunk_text(jd_text, words, overlap)]
     for doc in load_guidance():
         items += [
             ("guidance", doc.title, text)
@@ -89,7 +85,7 @@ def main() -> None:
     settings = get_settings()
     params = settings.coach()
     if args.min_similarity is not None:
-        params = type(params)(top_k=params.top_k, min_similarity=args.min_similarity)
+        params = dataclasses.replace(params, min_similarity=args.min_similarity)
     embedder = build_embedder(args.backend or settings.embedding_backend, settings.embedding_model)
     llm = build_llm(
         settings.llm_provider,

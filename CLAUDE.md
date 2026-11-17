@@ -26,21 +26,27 @@ Phases 1 and 2 are written. README.md has the architecture, API table and known 
 - Everything ran first time: 115 tests pass, 97% coverage, ruff clean. `/health` reports
   24 guidance documents; `/coach` was smoke-tested retrieval-only; the UI coach chat was
   driven headlessly with Streamlit's AppTest.
-- `eval/coach_eval.py` with the real embedding model, retrieval-only: hit rate at 5 is
-  55% (11/20), refusal accuracy 100% (30/30). README "Evaluation" explains the misses:
-  the resume is 4 passages and the JD 1 passage against 24 guidance passages, so gold
-  passages rank below guidance. The threshold is not the lever; chunking or a per-source
-  quota is. `eval/coach_answers.csv` is the untracked output for the manual check.
+- Retrieval change on 17 Nov 2026 (coach version 0.2.0): resume and JD passages are now
+  about 25 words each (`CoachParams.document_chunk_words`) and retrieval reserves a slot
+  for the best resume and best JD passage (`reserve_user_sources`). On the draft eval set
+  with the real embedding model this took hit rate at 5 from 11/20 to 20/20; refusal
+  accuracy stayed 30/30. Guidance chunking is unchanged, so no re-ingest happens.
+  Analyses made before this change keep their old coarse chunks.
+- `eval/load_test.py` (threads + requests, no Locust) was run against the API with a
+  fake 2-page resume: `/analyze` p95 767 ms at concurrency 1 and 2019 ms at
+  concurrency 4; `/coach` retrieval-only p95 34 ms and 160 ms. Numbers are in README.
+- `eval/coach_answers.csv` is the untracked eval output for the manual faithfulness check.
 - `.env` still has no `RESUMEFIT_LLM_*` or `RESUMEFIT_COACH_*` lines (defaults apply:
   no language model, retrieval-only coach).
 
 ## Do next, in order
 
-1. Owner decides on the retrieval fix (smaller resume and JD chunks, or a per-source
-   quota) and reviews the draft question set; then rerun `python -m eval.coach_eval`.
-2. Owner chooses a language model provider; then configure `.env`, rerun the eval, and
-   do the manual faithfulness check on the CSV.
-3. Still open from Phase 1: GitHub remote and CI, Docker build, labelled pairs, load test.
+1. Owner chooses a language model provider; then configure `.env`, rerun
+   `python -m eval.coach_eval --out eval/coach_answers.csv`, and do the manual
+   faithfulness check on the CSV.
+2. Owner adds a GitHub remote and pushes, so CI runs; installs Docker and runs the build.
+3. Collect consenting resumes, labelled pairs and real coach questions under `eval/`;
+   rerun both evaluations before quoting any quality number.
 
 Stop and ask the owner before: pushing to any remote, deploying, choosing or configuring a
 language-model provider, sending any text to a third-party model, starting Phase 3, or

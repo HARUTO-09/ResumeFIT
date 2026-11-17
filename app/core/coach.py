@@ -5,6 +5,7 @@ the job description, and the guidance corpus. Every answer carries citations,
 or says the sources do not cover the question.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -15,8 +16,9 @@ from app.core.llm import LLM
 from app.core.params import CoachParams
 from app.core.redaction import redact
 
-COACH_VERSION = "0.1.0"
+COACH_VERSION = "0.2.0"
 SOURCE_PREFIX = {"resume": "R", "jd": "J", "guidance": "G"}
+USER_SOURCES = ("resume", "jd")
 
 SYSTEM_PROMPT = """You are ResumeFit's resume coach for students.
 
@@ -70,13 +72,33 @@ def retrieve(
     embedder: Embedder,
     top_k: int = 5,
     min_similarity: float = 0.0,
+    reserved_sources: Sequence[str] = (),
 ) -> list[tuple[Passage, float]]:
-    """Dense top-k across all three sources, best first, above the similarity floor."""
+    """Dense top-k across all three sources, best first, above the similarity floor.
+
+    Each reserved source keeps a place for its best passage when that passage
+    clears the floor but did not make the top-k on its own; the weakest passage
+    from a non-reserved source makes room for it.
+    """
     if not passages:
         return []
     sims = vectors @ embedder.encode([question])[0]
-    order = np.argsort(-sims)[:top_k]
-    return [(passages[i], float(sims[i])) for i in order if sims[i] >= min_similarity]
+    order = [int(i) for i in np.argsort(-sims) if sims[i] >= min_similarity]
+    chosen = order[:top_k]
+    for source in reserved_sources:
+        if any(passages[i].source == source for i in chosen):
+            continue
+        best = next((i for i in order if passages[i].source == source), None)
+        if best is None:
+            continue
+        if len(chosen) >= top_k:
+            droppable = [i for i in chosen if passages[i].source not in reserved_sources]
+            if not droppable:
+                continue
+            chosen.remove(droppable[-1])
+        chosen.append(best)
+    chosen.sort(key=lambda i: -sims[i])
+    return [(passages[i], float(sims[i])) for i in chosen]
 
 
 def build_user_prompt(question: str, hits: list[tuple[Passage, float]]) -> str:
@@ -116,7 +138,15 @@ def answer_question(
     if reason:
         return CoachAnswer(status="declined", answer=DECLINE_MESSAGES[reason], reason=reason)
 
-    hits = retrieve(question, passages, vectors, embedder, params.top_k, params.min_similarity)
+    hits = retrieve(
+        question,
+        passages,
+        vectors,
+        embedder,
+        params.top_k,
+        params.min_similarity,
+        USER_SOURCES if params.reserve_user_sources else (),
+    )
     if not hits:
         return CoachAnswer(status="not_in_sources", answer=NOT_FOUND_MESSAGE)
 

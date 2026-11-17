@@ -195,6 +195,7 @@ def test_stored_resume_chunks_are_redacted(make_client, resume_pdf):
     with client.app.state.session_factory() as session:
         chunks = session.scalars(select(Chunk).where(Chunk.analysis_id == analysis_id)).all()
     assert {c.source for c in chunks} == {"resume", "jd"}
+    assert sum(c.source == "resume" for c in chunks) > 4  # about one bullet per passage
     resume_text = "\n".join(c.text for c in chunks if c.source == "resume")
     assert "PyTorch" in resume_text
     for secret in ("Asha", "asha.rao@example.com", "98765", "MG Road", "linkedin"):

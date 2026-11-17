@@ -20,8 +20,9 @@ Accounts, quotas and admin metrics (Phase 3) are planned and not built yet.
 | Dockerfile, GitHub Actions workflow | Written; **not yet run** (Docker is not installed on the dev machine; CI has not run) |
 | Score quality with the real embedding model | **Not measured.** Needs your labelled pairs |
 | Phase 2 coach core: chunking, retrieval, guardrails, LLM client | Built; unit tests pass |
-| Phase 2 storage and API: `chunks`, `coach_messages`, `POST /coach`, `tests/test_api_coach.py` | Built; 115 tests pass in all, 97% line coverage of `app/` |
+| Phase 2 storage and API: `chunks`, `coach_messages`, `POST /coach`, `tests/test_api_coach.py` | Built; 117 tests pass in all, 97% line coverage of `app/` |
 | Coach with the real embedding model, retrieval-only | Smoke-tested by hand: `/health` reports 24 guidance documents; `/coach` returns cited passages, declines a hiring question, and answers "not in the sources" for an off-topic one. `eval/coach_eval.py` was run; see the results table |
+| Load test (`eval/load_test.py`, 2-page fake resume, laptop CPU) | Run on 17 Nov 2026; see the results table |
 | Coach with a real language model | **Not run.** No provider is configured; answer quality is unmeasured |
 | Coach chat in the Streamlit UI | Driven headlessly against the running API: a question is sent, the answer and a "Sources (5)" expander render |
 
@@ -120,6 +121,13 @@ question ─► scope check ─► retrieve top 5 ─► language model ─► g
   is an exact dot product. This replaces the FAISS or Chroma option in the PRD: at this
   size no index is needed, and deleting an analysis with its passages is one transaction.
   `app/store.py` is the only place to change if you add a vector library later.
+- **Passage sizes and retrieval.** Guidance documents are chunked at about 180 words. The
+  resume and the JD are chunked at about 25 words, roughly one bullet or sentence each, so
+  a question about one fact matches that line rather than a whole section. Retrieval takes
+  the top 5 overall, then keeps a place for the best resume passage and the best JD passage
+  if they clear the floor, so the longer guidance passages cannot crowd the student's own
+  documents out (`CoachParams` in `app/core/params.py`). Both choices came from the draft
+  eval set, which is small and fake; recheck them on real data.
 - **Answer status.** `answered` (generated text, every claim cited), `retrieval_only`
   (passages shown with no generated text: either no model is configured, or the model's
   answer failed the groundedness check and was discarded), `not_in_sources`, `declined`.
@@ -176,29 +184,36 @@ gold passage before reporting numbers.
 python -m eval.coach_eval --out eval/coach_answers.csv
 ```
 
+`eval/load_test.py` sends `/analyze` and `/coach` requests to a running API with a thread
+pool and prints p50 and p95 latency. It needs only `requests`, so Locust is not required.
+
+```powershell
+python -m eval.load_test --resume resume.pdf --jd jd.txt --requests 30 --concurrency 4
+```
+
 | Metric | Target (PRD) | Measured |
 | --- | --- | --- |
-| Coach retrieval hit rate at 5, answerable questions (draft set, fake sample data) | none set | 55% (11/20), real embedding model, retrieval-only, threshold 0.25, 17 Nov 2026 |
+| Coach retrieval hit rate at 5, answerable questions (draft set, fake sample data) | none set | 100% (20/20), real embedding model, retrieval-only, threshold 0.25, 17 Nov 2026. It was 55% (11/20) before the passage-size and reserved-slot change described above |
 | Coach refusal accuracy, all 30 draft questions | none set | 100% (30/30), same run |
 | Coach answers that cite a source passage | ≥ 90% | not measured (needs a language model; retrieval-only answers always show their passages) |
 | Coach answers judged faithful (manual) | ≥ 85% | not measured |
-| Coach answer p95 latency | < 8 s | not measured (no load test; single retrieval-only `/coach` calls took under 30 ms) |
+| Coach answer p95 latency | < 8 s | retrieval-only, laptop CPU, 17 Nov 2026: 34 ms at concurrency 1 (20 requests), 160 ms at concurrency 4 (30 requests). Not measured with a language model |
 | Band agreement with human labels, held-out pairs | ≥ 70% | not measured |
 | Gain over keyword baseline | ≥ 10 points | not measured |
-| `/analyze` p95 latency, 2-page resume | < 3 s | not measured (no load test yet; single requests on a one-page fake resume took 0.6 to 2.4 s on a laptop CPU, the slowest being the first call after startup) |
-| Test coverage, core modules | ≥ 80% | 97% of `app/` lines (115 tests, hashing embedder, 17 Nov 2026) |
+| `/analyze` p95 latency, 2-page resume | < 3 s | fake 2-page resume, laptop CPU, 17 Nov 2026: p50 720 ms and p95 767 ms at concurrency 1 (20 requests); p50 1692 ms and p95 2019 ms at concurrency 4 (30 requests). Measured end to end from the client, after one warm-up call |
+| Test coverage, core modules | ≥ 80% | 97% of `app/` lines (117 tests, hashing embedder, 17 Nov 2026) |
 
 Fill this table only with numbers you have run.
 
-**Why the hit rate is 55%.** On the eval corpus the resume becomes 4 passages (one per
-section) and the JD a single passage, against 24 guidance passages. For the 9 misses the
-gold resume or JD passage was usually ranked 6th to 25th, below several longer guidance
-passages on the same topic; its similarity was between 0.11 and 0.38, while the top hit
-scored 0.30 to 0.82. Lowering `RESUMEFIT_COACH_MIN_SIMILARITY` would not help, because
-`top_k` cuts first. The plain off-topic questions scored at most 0.18 against any passage,
-and the three hiring questions (up to 0.37) were caught by the scope rules before
-retrieval. The likely levers are smaller resume and JD chunks, or a per-source quota in
-retrieval; both are untried.
+**How the hit rate went from 55% to 100%.** With 180-word passages the resume was 4 passages
+(one per section) and the JD a single passage, against 24 guidance passages. For the 9
+misses the gold resume or JD passage ranked 6th to 25th behind longer guidance passages on
+the same topic. The retrieval floor was not the lever: `top_k` cuts first, and the plain
+off-topic questions scored at most 0.18 against any passage. Chunking the resume and JD at
+25 words gave 18/20 on its own, and the reserved slot for the best resume and JD passage
+gave 20/20. Twenty questions on one fake resume is a small set, so treat this as a sanity
+check rather than a result; the question set itself was reviewed on 17 Nov 2026 and every
+gold passage exists in the sources.
 
 ## Known limits
 
@@ -222,10 +237,10 @@ retrieval; both are untried.
 
 ## Next steps
 
-1. Decide how to raise retrieval hit rate (smaller resume and JD chunks, or a per-source
-   quota) and rerun `python -m eval.coach_eval`; review the draft question set first.
-2. Choose a language model, configure it in `.env`, rerun the evaluation, and do the manual
+1. Choose a language model, configure it in `.env`, rerun the evaluation, and do the manual
    faithfulness check on `eval/coach_answers.csv`. Fill the results table.
-3. Still open from Phase 1: labelled resume and JD pairs, threshold tuning, load test,
-   Docker build, CI.
+2. Add questions from real, consenting users to `eval/coach_questions.json` and rerun the
+   coach evaluation; the current 100% is on 20 questions about one fake resume.
+3. Still open from Phase 1: labelled resume and JD pairs, threshold tuning, Docker build,
+   CI (needs a GitHub remote).
 4. Phase 3: accounts, per-user isolation, quotas, feedback, admin metrics.
