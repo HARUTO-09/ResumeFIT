@@ -8,7 +8,9 @@ small style sheet below; run Streamlit from the repository root so it finds both
 """
 
 import html
+import math
 import os
+import re
 import time
 from pathlib import Path
 
@@ -77,6 +79,41 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 .rf-suggestion { padding: .55rem 0; border-bottom: 1px solid #f0f0f0; font-size: .93rem; }
 .rf-suggestion:last-child { border-bottom: none; }
 .rf-suggestion b { font-weight: 600; }
+.rf-ring { display: flex; justify-content: center; }
+.rf-verdict { font-size: 1.05rem; font-weight: 600; margin: .45rem 0 .9rem; line-height: 1.35; }
+.rf-start { display: flex; gap: .9rem; align-items: baseline; background: #111827; color: #f9fafb;
+  border-radius: .6rem; padding: .8rem 1rem; margin: 1rem 0 .2rem; font-size: .93rem; }
+.rf-start-k { font-size: .68rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: #fbbf24; white-space: nowrap; }
+.rf-suggestion { display: grid; grid-template-columns: 9rem 1fr; gap: .8rem; }
+.rf-suggestion-k { font-weight: 600; color: #374151; }
+@media (max-width: 640px) {
+  .rf-suggestion { grid-template-columns: 1fr; gap: .1rem; }
+  .rf-start { flex-direction: column; gap: .25rem; }
+}
+.rf-cite { display: inline-block; padding: 0 6px; margin: 0 1px; border-radius: 5px;
+  font-size: .72rem; font-weight: 600; line-height: 1.5; vertical-align: 1px;
+  background: #eef2ff; color: #4338ca; }
+.rf-source { padding: .45rem 0; border-bottom: 1px solid #f0f0f0; }
+.rf-source:last-child { border-bottom: none; }
+.rf-steps { display: flex; gap: .5rem; margin: .4rem 0 .2rem; flex-wrap: wrap; }
+.rf-step { display: flex; align-items: center; gap: .45rem; font-size: .82rem; color: #9ca3af; }
+.rf-step:not(:last-child)::after { content: ""; width: 1.4rem; border-top: 1px solid #e5e7eb;
+  margin-left: .2rem; }
+.rf-step span { display: inline-flex; width: 1.35rem; height: 1.35rem; border-radius: 999px;
+  align-items: center; justify-content: center; font-size: .72rem; font-weight: 600;
+  border: 1px solid #e5e7eb; background: #fff; }
+.rf-step.on { color: #111827; }
+.rf-step.on span { background: #111827; border-color: #111827; color: #fff; }
+.rf-file { display: flex; gap: .8rem; align-items: center; background: #fff;
+  border: 1px solid #e5e7eb; border-radius: .6rem; padding: .65rem .8rem; }
+.rf-file > span { font-size: .65rem; font-weight: 700; color: #b91c1c; background: #fef2f2;
+  border-radius: 6px; padding: .45rem .4rem; }
+.rf-count { font-size: .78rem; color: #9ca3af; text-align: right; margin-top: -.6rem; }
+.rf-count.bad { color: #b91c1c; }
+.rf-center { text-align: center; margin-top: -.4rem; }
+.rf-empty { text-align: center; padding: 3rem 1rem; border: 1px dashed #e5e7eb;
+  border-radius: .8rem; margin-top: 1rem; }
 .rf-clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden; }
 [data-testid="stChatMessageAvatarCustom"], [data-testid="stChatMessageAvatarUser"],
@@ -383,6 +420,12 @@ def show_consent() -> None:
 
 
 # ---- analysis, ratings and coach -----------------------------------------------------------
+BAND_COLOR = {"strong": "#059669", "partial": "#d97706", "weak": "#dc2626"}
+BAND_WORDS = {"strong": "Strong match", "partial": "Partial match", "weak": "Weak match"}
+SOURCE_NAMES = {"resume": "Your resume", "jd": "Job description", "guidance": "Guide"}
+CITATION = re.compile(r"\[([RJG]\d+)\]")
+
+
 def show_rating(target_type: str, target_id: str, prompt: str, where: str) -> None:
     """Five stars for an analysis or a coach answer; sent as soon as one is picked."""
     sent = st.session_state.setdefault("rated", {})
@@ -423,23 +466,117 @@ def chips(items: list[str], kind: str) -> str:
     )
 
 
-def show_analysis(a: dict, where: str) -> None:
-    score_col, parts_col = st.columns([2, 3], gap="large", vertical_alignment="center")
+def score_ring(score: int, band: str, size: int = 132) -> str:
+    """The score as a ring: the arc is the score out of 100, coloured by band."""
+    radius = 52
+    circumference = 2 * math.pi * radius
+    arc = circumference * min(max(score, 0), 100) / 100
+    color = BAND_COLOR.get(band, "#111827")
+    return (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 120 120" role="img" '
+        f'aria-label="Score {score} out of 100">'
+        '<circle cx="60" cy="60" r="52" fill="none" stroke="#eceef1" stroke-width="9"/>'
+        f'<circle cx="60" cy="60" r="52" fill="none" stroke="{color}" stroke-width="9" '
+        f'stroke-linecap="round" stroke-dasharray="{arc:.1f} {circumference:.1f}" '
+        'transform="rotate(-90 60 60)"/>'
+        f'<text x="60" y="66" text-anchor="middle" font-size="32" font-weight="700" '
+        f'fill="#111827" font-family="Inter, sans-serif">{score}</text>'
+        '<text x="60" y="84" text-anchor="middle" font-size="10" fill="#9ca3af" '
+        'font-family="Inter, sans-serif">of 100</text></svg>'
+    )
+
+
+def verdict(a: dict) -> str:
+    """One plain sentence from the analysis's own numbers."""
     band = str(a["band"]).lower()
-    score_col.markdown(
-        f'<div class="rf-score">{int(a["score"])}<small> / 100</small></div>'
-        f'<span class="rf-band {esc(band)}">{esc(band)}</span>',
-        unsafe_allow_html=True,
-    )
-    parts_col.markdown(
-        "".join(
-            bar(name.replace("_", " ").capitalize(), value)
-            for name, value in a["components"].items()
-        ),
-        unsafe_allow_html=True,
-    )
+    matched, missing = len(a["matched_skills"]), len(a["missing_skills"])
+    words = BAND_WORDS.get(band, band.capitalize())
+    if matched + missing == 0:
+        return f"{words}. No listed skills were found in the job description."
+    return f"{words}. You cover {matched} of {matched + missing} skills this job lists."
+
+
+def top_gap(a: dict) -> dict | None:
+    if not a["missing_skills"]:
+        return None
+    return max(a["missing_skills"], key=lambda m: m["jd_mentions"])
+
+
+def report_markdown(a: dict) -> str:
+    """The analysis as a Markdown file the user can keep."""
+    lines = [
+        "# ResumeFit report",
+        "",
+        f"Score: **{a['score']} / 100** ({a['band']})",
+        "",
+        verdict(a),
+        "",
+        "## How the score is built",
+        "",
+    ]
+    for name, value in a["components"].items():
+        shown = "n/a" if value is None else f"{value:.2f}"
+        lines.append(f"- {name.replace('_', ' ').capitalize()}: {shown}")
+    lines += ["", "## Matched skills", "", ", ".join(a["matched_skills"]) or "None found."]
+    lines += ["", "## Missing skills", ""]
+    lines += [
+        f"- {m['skill']} (mentioned {m['jd_mentions']}x in the job description)"
+        for m in a["missing_skills"]
+    ] or ["None."]
+    lines += ["", "## Suggestions", ""]
+    if a["sections_missing"]:
+        lines.append(f"- Sections not found: {', '.join(a['sections_missing'])}")
+    lines += [f"- {s['section'].capitalize()}: {s['text']}" for s in a["suggestions"]]
+    if not a["suggestions"] and not a["sections_missing"]:
+        lines.append("No weak sections flagged.")
+    lines += [
+        "",
+        "---",
+        f"{a['id']} · {a['model_version']}. The score is a guide to improving a resume, "
+        "not a hiring decision, and it can be wrong.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def show_analysis(a: dict, where: str) -> None:
+    band = str(a["band"]).lower()
+    with st.container(border=True):
+        ring, summary = st.columns([1, 2], gap="medium", vertical_alignment="center")
+        ring.markdown(
+            f'<div class="rf-ring">{score_ring(int(a["score"]), band)}</div>',
+            unsafe_allow_html=True,
+        )
+        summary.markdown(
+            f'<span class="rf-band {esc(band)}">{esc(band)}</span>'
+            f'<div class="rf-verdict">{esc(verdict(a))}</div>'
+            + "".join(
+                bar(name.replace("_", " ").capitalize(), value)
+                for name, value in a["components"].items()
+            ),
+            unsafe_allow_html=True,
+        )
     for note in a["notes"]:
         html_block(f'<div class="rf-note">{esc(note)}</div>')
+
+    gap = top_gap(a)
+    if gap:
+        html_block(
+            '<div class="rf-start"><div class="rf-start-k">Start here</div>'
+            f"<div><b>{esc(gap['skill'])}</b> is the biggest gap: the job description "
+            f"mentions it {int(gap['jd_mentions'])}×. If you have used it, say where and "
+            "what came of it.</div></div>"
+        )
+
+    label("Missing skills")
+    if a["missing_skills"]:
+        ordered = sorted(a["missing_skills"], key=lambda m: -m["jd_mentions"])
+        html_block(
+            chips([f"{esc(m['skill'])}<em>×{int(m['jd_mentions'])}</em>" for m in ordered], "miss")
+        )
+        html_block('<div class="rf-small">× = times the job description mentions it</div>')
+    else:
+        html_block('<span class="rf-muted">None. Every listed skill was found.</span>')
 
     label("Matched skills")
     if a["matched_skills"]:
@@ -452,28 +589,19 @@ def show_analysis(a: dict, where: str) -> None:
             f"{esc(m['skill'])} (similar meaning)</div>"
         )
 
-    label("Missing skills")
-    if a["missing_skills"]:
-        html_block(
-            chips(
-                [
-                    f"{esc(m['skill'])}<em>×{int(m['jd_mentions'])}</em>"
-                    for m in a["missing_skills"]
-                ],
-                "miss",
-            )
-        )
-        html_block('<div class="rf-small">× = times the job description mentions it</div>')
-    else:
-        html_block('<span class="rf-muted">None. Every listed skill was found.</span>')
-
     label("Suggestions")
     rows = []
     if a["sections_missing"]:
-        rows.append(f"<b>Sections not found</b>: {esc(', '.join(a['sections_missing']))}")
-    rows += [f"<b>{esc(s['section'].capitalize())}</b>: {esc(s['text'])}" for s in a["suggestions"]]
+        rows.append(("Sections not found", ", ".join(a["sections_missing"])))
+    rows += [(s["section"].capitalize(), s["text"]) for s in a["suggestions"]]
     if rows:
-        html_block("".join(f'<div class="rf-suggestion">{row}</div>' for row in rows))
+        html_block(
+            "".join(
+                f'<div class="rf-suggestion"><div class="rf-suggestion-k">{esc(k)}</div>'
+                f"<div>{esc(v)}</div></div>"
+                for k, v in rows
+            )
+        )
     else:
         html_block('<span class="rf-muted">No weak sections flagged.</span>')
 
@@ -485,7 +613,25 @@ def show_analysis(a: dict, where: str) -> None:
     )
 
 
-def show_coach(analysis_id: str) -> None:
+def answer_html(text: str) -> str:
+    """Escape the model's text and show [R12]-style citations as small badges."""
+    return CITATION.sub(r'<span class="rf-cite">\1</span>', esc(text))
+
+
+def suggested_questions(a: dict) -> list[str]:
+    questions = []
+    gap = top_gap(a)
+    if gap:
+        questions.append(f"How can I show {gap['skill']} for this job?")
+    questions.append("Which of my projects fits this job best?")
+    if a["suggestions"]:
+        questions.append(f"How do I strengthen my {a['suggestions'][0]['section']} section?")
+    questions.append("What does this job care about most?")
+    return questions[:4]
+
+
+def show_coach(a: dict) -> None:
+    analysis_id = a["id"]
     label("Ask the coach")
     html_block(
         '<div class="rf-muted">Answers come only from your resume, this job description and '
@@ -498,21 +644,42 @@ def show_coach(analysis_id: str) -> None:
         with st.chat_message("user", avatar=":material/person:"):
             st.write(turn["question"])
         with st.chat_message("assistant", avatar=":material/school:"):
-            st.markdown(turn["answer"])
+            st.markdown(answer_html(turn["answer"]), unsafe_allow_html=True)
             if turn["citations"]:
                 with st.expander(f"Sources · {len(turn['citations'])}"):
                     for c in turn["citations"]:
-                        st.markdown(f"**[{c['id']}] {c['label']}** · {c['source']}")
-                        st.caption(c["text"])
+                        source = SOURCE_NAMES.get(c["source"], c["source"])
+                        html_block(
+                            f'<div class="rf-source"><span class="rf-cite">{esc(c["id"])}</span>'
+                            f" <b>{esc(c['label'])}</b> "
+                            f'<span class="rf-small">· {esc(source)}</span>'
+                            f'<div class="rf-muted">{esc(c["text"])}</div></div>'
+                        )
             if turn.get("id"):
                 show_rating("coach_message", turn["id"], "Useful answer?", "coach")
-    question = st.chat_input(
-        "How do I show deployment experience for this job?",
-        max_chars=500,
-        key=f"coach_{analysis_id}",
+
+    pills_key = f"suggest_{analysis_id}_{len(history)}"
+    picked = st.pills(
+        "Try asking",
+        suggested_questions(a),
+        key=pills_key,
+        label_visibility="collapsed" if history else "visible",
     )
-    if question and question.strip():
-        with st.spinner("Reading the sources…"):
+    typed = st.chat_input(
+        "Ask about your resume and this job…", max_chars=500, key=f"coach_{analysis_id}"
+    )
+    if picked and st.session_state.get("suggest_sent") == (pills_key, picked):
+        picked = None  # a suggestion is sent once, even if a later rerun keeps it selected
+    question = (typed or picked or "").strip()
+    if question:
+        if picked and not typed:
+            st.session_state["suggest_sent"] = (pills_key, picked)
+        with st.chat_message("user", avatar=":material/person:"):
+            st.write(question)
+        with (
+            st.chat_message("assistant", avatar=":material/school:"),
+            st.spinner("Reading your sources and writing an answer. This can take up to a minute."),
+        ):
             data, error = api(
                 "POST", "/coach", json={"analysis_id": analysis_id, "question": question}
             )
@@ -531,13 +698,42 @@ def show_coach(analysis_id: str) -> None:
 
 
 # ---- tabs ---------------------------------------------------------------------------
-def show_new_analysis() -> None:
-    label("Resume")
-    resume = st.file_uploader(
-        "Resume", type=["pdf"], label_visibility="collapsed", help="PDF, up to 5 MB and 5 pages."
+def steps(active: int) -> None:
+    names = ["Add your resume", "Add the job", "See the gaps and ask"]
+    html_block(
+        '<div class="rf-steps">'
+        + "".join(
+            f'<div class="rf-step{" on" if i <= active else ""}"><span>{i}</span>{esc(n)}</div>'
+            for i, n in enumerate(names, start=1)
+        )
+        + "</div>"
     )
 
-    label("Job description")
+
+def resume_input() -> tuple[str, bytes] | None:
+    """The resume for this analysis; the last one used is remembered for this visit."""
+    kept = st.session_state.get("resume_file")
+    if kept:
+        name, size = kept[0], len(kept[1])
+        info, change = st.columns([5, 1], vertical_alignment="center")
+        info.markdown(
+            f'<div class="rf-file"><span>PDF</span><div><b>{esc(name)}</b>'
+            f'<div class="rf-small">{size / 1024:.0f} KB · used in your last analysis</div>'
+            "</div></div>",
+            unsafe_allow_html=True,
+        )
+        if change.button("Change", type="tertiary", key="resume_change"):
+            st.session_state.pop("resume_file")
+            st.rerun()
+        return kept
+    upload = st.file_uploader(
+        "Resume", type=["pdf"], label_visibility="collapsed", help="PDF, up to 5 MB and 5 pages."
+    )
+    return (upload.name, upload.getvalue()) if upload is not None else None
+
+
+def jd_input() -> tuple[str, str]:
+    """The job description text and its source ("text", "pdf" or "docx")."""
     mode = st.segmented_control(
         "Job description input",
         ["Paste text", "Upload file"],
@@ -545,41 +741,76 @@ def show_new_analysis() -> None:
         key="jd_mode",
         label_visibility="collapsed",
     )
-    jd_source = "text"
     if mode != "Upload file":
-        jd_text = st.text_area(
+        text = st.text_area(
             "Job description",
             height=220,
             label_visibility="collapsed",
-            placeholder="Paste the job description here (200 to 10,000 characters).",
+            key="jd_text",
+            placeholder="Paste the full job description: responsibilities, requirements, "
+            "nice-to-haves.",
         )
-    else:
-        jd_file = st.file_uploader(
-            "Job description file", type=["pdf", "docx"], label_visibility="collapsed"
-        )
-        if jd_file is not None:
-            file_key = f"{jd_file.name}:{jd_file.size}"
-            if st.session_state.get("jd_file_key") != file_key:
-                data, error = api(
-                    "POST", "/jd/extract", files={"file": (jd_file.name, jd_file.getvalue())}
-                )
-                st.session_state["jd_file_key"] = file_key
-                st.session_state["jd_extract"] = data
-                st.session_state["jd_extract_error"] = error
-                if data:
-                    st.session_state["jd_edit"] = data["text"]
-            if st.session_state.get("jd_extract_error"):
-                st.error(st.session_state["jd_extract_error"])
-            extract = st.session_state.get("jd_extract")
-            if extract:
-                jd_source = extract["source"]
-                if extract.get("warning"):
-                    st.warning(extract["warning"])
-                st.caption("Check the extracted text and edit it if needed before scoring.")
-        jd_text = (
-            st.text_area("Extracted job description", key="jd_edit", height=220)
-            if st.session_state.get("jd_extract") and jd_file is not None
-            else ""
+        return text, "text"
+    jd_file = st.file_uploader(
+        "Job description file", type=["pdf", "docx"], label_visibility="collapsed"
+    )
+    if jd_file is None:
+        return "", "text"
+    file_key = f"{jd_file.name}:{jd_file.size}"
+    if st.session_state.get("jd_file_key") != file_key:
+        data, error = api("POST", "/jd/extract", files={"file": (jd_file.name, jd_file.getvalue())})
+        st.session_state["jd_file_key"] = file_key
+        st.session_state["jd_extract"] = data
+        st.session_state["jd_extract_error"] = error
+        if data:
+            st.session_state["jd_edit"] = data["text"]
+    if st.session_state.get("jd_extract_error"):
+        st.error(st.session_state["jd_extract_error"])
+    extract = st.session_state.get("jd_extract")
+    if not extract:
+        return "", "text"
+    if extract.get("warning"):
+        st.warning(extract["warning"])
+    st.caption("Check the extracted text and edit it if needed before scoring.")
+    return st.text_area("Extracted job description", key="jd_edit", height=220), extract["source"]
+
+
+def show_new_analysis() -> None:
+    last = st.session_state.get("last_analysis")
+    if last:
+        back, download = st.columns([1, 1], vertical_alignment="center")
+        if back.button("← New analysis", type="tertiary", key="new_analysis"):
+            st.session_state.pop("last_analysis")
+            st.session_state.pop("jd_text", None)
+            st.rerun()
+        with download:
+            st.download_button(
+                "Download report",
+                report_markdown(last),
+                file_name=f"resumefit-{last['id']}.md",
+                mime="text/markdown",
+                icon=":material/download:",
+                key="download_report",
+                width="stretch",
+            )
+        show_analysis(last, "new")
+        st.divider()
+        show_coach(last)
+        return
+
+    resume = None if st.session_state.get("resume_file") is None else True
+    steps(1 if resume is None else 2)
+    label("Resume")
+    resume = resume_input()
+    label("Job description")
+    jd_text, jd_source = jd_input()
+    length = len(jd_text.strip())
+    if length:
+        ok = 200 <= length <= 10_000
+        html_block(
+            f'<div class="rf-count{"" if ok else " bad"}">{length:,} characters'
+            + ("" if ok else " · needs 200 to 10,000")
+            + "</div>"
         )
 
     store = st.checkbox(
@@ -587,13 +818,17 @@ def show_new_analysis() -> None:
         help="Off by default. Short redacted passages are always kept for the coach; "
         "the uploaded file itself is never kept.",
     )
-    ready = resume is not None and bool(jd_text.strip())
-    if st.button("Analyse fit", type="primary", width="stretch", disabled=not ready):
-        with st.spinner("Scoring…"):
+    missing = []
+    if resume is None:
+        missing.append("a resume")
+    if not length:
+        missing.append("a job description")
+    if st.button("Analyse fit", type="primary", width="stretch", disabled=bool(missing)):
+        with st.spinner("Scoring your resume…"):
             data, error = api(
                 "POST",
                 "/analyze",
-                files={"resume": (resume.name, resume.getvalue(), "application/pdf")},
+                files={"resume": (resume[0], resume[1], "application/pdf")},
                 data={
                     "jd_text": jd_text,
                     "jd_source": jd_source,
@@ -604,13 +839,12 @@ def show_new_analysis() -> None:
             st.error(error)
         else:
             st.session_state["last_analysis"] = data
-
-    last = st.session_state.get("last_analysis")
-    if last:
-        st.divider()
-        show_analysis(last, "new")
-        st.divider()
-        show_coach(last["id"])
+            st.session_state["resume_file"] = resume
+            st.rerun()
+    if missing:
+        html_block(
+            f'<div class="rf-small rf-center">Add {" and ".join(missing)} to continue.</div>'
+        )
 
 
 def show_history() -> None:
@@ -619,19 +853,34 @@ def show_history() -> None:
         st.error(error)
         return
     if not rows:
-        html_block('<div class="rf-muted" style="margin-top:1rem">No saved analyses yet.</div>')
+        html_block(
+            '<div class="rf-empty"><b>No analyses yet</b><div class="rf-muted">Your '
+            "analyses appear here for 30 days.</div></div>"
+        )
         return
-    html_block(
-        '<div class="rf-small" style="margin:.5rem 0 1rem">Analyses are deleted '
-        "automatically after 30 days.</div>"
-    )
+    if len(rows) >= 2:
+        label("Score over time")
+        ordered = sorted(rows, key=lambda r: r["created_at"])
+        trend = pd.DataFrame(
+            {"Analysis": range(1, len(ordered) + 1), "Score": [r["score"] for r in ordered]}
+        )
+        st.line_chart(
+            trend,
+            x="Analysis",
+            y="Score",
+            height=140,
+            color="#111827",
+            x_label="Analysis, oldest first",
+        )
+    label(f"{len(rows)} saved · deleted automatically after 30 days")
     for row in rows:
+        band = str(row["band"]).lower()
         with st.container(border=True):
             score, text, actions = st.columns([1, 5, 2], vertical_alignment="center")
             score.markdown(
-                f'<div class="rf-row-score">{int(row["score"])}</div>'
-                f'<span class="rf-band {esc(str(row["band"]).lower())}">'
-                f"{esc(str(row['band']))}</span>",
+                f'<div class="rf-row-score" style="color:{BAND_COLOR.get(band, "#111827")}">'
+                f"{int(row['score'])}</div>"
+                f'<span class="rf-band {esc(band)}">{esc(band)}</span>',
                 unsafe_allow_html=True,
             )
             text.markdown(
@@ -646,14 +895,17 @@ def show_history() -> None:
                 ):
                     st.session_state["opened"] = None if opened else row["id"]
                     st.rerun()
-                if st.button("Delete", key=f"del_{row['id']}", type="tertiary", width="stretch"):
-                    _, error = api("DELETE", f"/analyses/{row['id']}")
-                    if error:
-                        st.error(error)
-                    else:
-                        if st.session_state.get("last_analysis", {}).get("id") == row["id"]:
-                            st.session_state.pop("last_analysis")
-                        st.rerun()
+                with st.popover("Delete", type="tertiary", width="stretch"):
+                    st.markdown("Delete this analysis and its coach chat? This cannot be undone.")
+                    if st.button("Delete", key=f"del_{row['id']}", type="primary"):
+                        _, error = api("DELETE", f"/analyses/{row['id']}")
+                        if error:
+                            st.error(error)
+                        else:
+                            if st.session_state.get("last_analysis", {}).get("id") == row["id"]:
+                                st.session_state.pop("last_analysis")
+                            st.toast("Analysis deleted.")
+                            st.rerun()
             if opened:
                 detail, error = api("GET", f"/analyses/{row['id']}")
                 if error:
