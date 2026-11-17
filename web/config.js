@@ -3,7 +3,7 @@
 const local = ["localhost", "127.0.0.1"].includes(location.hostname);
 
 // Where the ResumeFit API runs. Set the deployed URL before publishing the site.
-export const API_URL = local ? "http://127.0.0.1:8000" : "https://YOUR-API-HOST.example";
+export const API_URL = local ? "http://127.0.0.1:8000" : "https://resumefit-api-x93n.onrender.com";
 
 // The company that runs the coach's language model, shown on the privacy page and at
 // sign-up. Leave empty when the model runs on your own machine (Ollama).

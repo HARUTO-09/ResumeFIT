@@ -89,8 +89,13 @@ All three are written. README.md has the architecture, API table and known limit
   503 "high demand". Eval: 20/20 cited, 19/20 faithful (Claude's reading, not the
   owner's), p50 1.5 s, p95 8.2 s. README Privacy and `web/config.js` name Google.
   Answers CSV in scratchpad `coach_answers_gemini.csv`. Ollama is no longer needed.
-- Free stack: `web/` on Vercel Hobby, API on Render free (Docker, 512 MB, `render.yaml`,
-  region virginia), Neon Postgres. Hugging Face was dropped: Docker Spaces now need PRO
+- Free stack: `web/` on Vercel Hobby (not yet), API on Render free (Docker, 512 MB,
+  region virginia), Neon Postgres.
+- Render: service `srv-dbu8vuui0phs7394d830`, `https://resumefit-api-x93n.onrender.com`,
+  workspace `tea-dbu8k9k9v7es73e1l8d0`, auto-deploys from `main`. Created through the
+  Render API (scratchpad `render_deploy.py`), env vars set there (secrets not in repo).
+  Live 17 Nov; account flow 21/21 against it. CORS origins not set until the Vercel URL
+  exists. Pushing to main redeploys production. Hugging Face was dropped: Docker Spaces now need PRO
   (402 on create, nothing was created). `deploy/hf_space.py` is unused.
 - Embeddings now run through ONNX Runtime (`OnnxEmbedder`, default backend `onnx`, model
   revision pinned); no torch in requirements. Verified identical to sentence-transformers
