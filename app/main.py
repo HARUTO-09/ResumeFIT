@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -165,6 +166,19 @@ def create_app(
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": {"code": code, "message": str(exc.detail)}},
+        )
+
+    # Added last, so it wraps everything above: error responses get CORS headers too,
+    # and the browser can read their {"error": ...} body.
+    origins = settings.cors_origin_list()
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_methods=["GET", "POST", "DELETE"],
+            allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+            expose_headers=["X-Request-ID", "Retry-After"],
+            max_age=600,
         )
 
     app.include_router(router)

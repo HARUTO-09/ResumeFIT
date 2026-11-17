@@ -75,6 +75,24 @@ All three are written. README.md has the architecture, API table and known limit
   deletion all passed (21/21). Script: scratchpad `account_flow.py` (not in the repo).
   The UI's sign-in screens, especially Google, still need a click-through in a browser.
 
+## Web front end and free hosting (17 Nov 2026, late)
+
+- The owner wants everything on free tiers, looking like a real product. They asked for a
+  lighter UI than Streamlit: `web/` is plain HTML/CSS/JS (no build), Firebase JS SDK
+  10.12.2 from gstatic, API URL and coach-provider privacy text in `web/config.js`.
+  Serve with `python -m http.server 5500 --directory web` and open `localhost:5500`.
+- API has CORS from `RESUMEFIT_CORS_ORIGINS` (`.env` has `http://localhost:5500`).
+  222 tests pass, 97%, ruff clean. Browser flow (scratchpad `web_flow.py`, Playwright with
+  Edge) passed 21/21 with a throwaway test account it deletes.
+- Coach: the owner chose a hosted model for speed, Google Gemini if free. Not configured
+  yet: needs their AI Studio API key and their OK on the free tier's data terms. Gemini
+  works through the existing `openai-compatible` client (base URL
+  `https://generativelanguage.googleapis.com/v1beta/openai/`). When switched: update
+  README Privacy ("Third-party model provider"), `COACH_PROVIDER` and its note in
+  `web/config.js`.
+- Planned free stack, not deployed: `web/` on Vercel Hobby, API on Hugging Face Spaces
+  (Docker, free CPU), Neon Postgres (needs `psycopg` added and a test run on Postgres).
+
 ## Do next, in order
 
 1. Done 17 Nov: requirements installed, 218 tests pass, ruff clean. Keep the isolation,

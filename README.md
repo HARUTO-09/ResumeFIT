@@ -28,9 +28,10 @@ holds all three phases of the PRD: **Matcher MVP**, **RAG coach** and **SaaS-lit
 | Coach with a real language model | Local qwen2.5:3b through Ollama, chosen from three local models (see "Choosing the coach model"). Evaluated and smoke-tested through `/coach`; it misses the PRD citation, faithfulness and latency targets on this laptop |
 | Coach chat in the Streamlit UI | Driven headlessly against the running API: a question is sent, the answer and a "Sources (5)" expander render |
 | Phase 3 core: Firebase token verification, the UI's Firebase REST client, monitoring and drift functions (17 Nov 2026) | Built; unit tests pass, against a local fake of Firebase's keys and endpoints |
-| Phase 3 API: Firebase sign-in, per-user isolation, quotas, feedback, admin metrics, request metrics; `tests/test_api_accounts.py`, `test_api_isolation.py`, `test_api_quotas.py`, `test_api_feedback_admin.py`; existing API tests now sign in | Built; 218 tests pass in all on this machine, 97% line coverage of `app/` |
+| Phase 3 API: Firebase sign-in, per-user isolation, quotas, feedback, admin metrics, request metrics; `tests/test_api_accounts.py`, `test_api_isolation.py`, `test_api_quotas.py`, `test_api_feedback_admin.py`; existing API tests now sign in | Built; 222 tests pass in all on this machine (with `tests/test_cors.py`), 97% line coverage of `app/` |
 | Phase 3 API against the real Firebase project `resumefit-2b9f9` | Run on 17 Nov 2026 with two throwaway email/password test accounts (created through Firebase's REST API, then deleted): register refused without consent (422) and accepted with it; analysis and coach answer; rating and re-rating an analysis, rating a coach answer; the second account sees no analyses and gets 404 when reading, coaching on, rating or deleting the first account's analysis, and 403 on admin metrics; both accounts deleted (204), after which the token gets 403. All 21 checks passed |
 | Phase 3 Streamlit UI: Google and email sign-in through Firebase, consent step, ratings, account deletion, admin tab | Redesigned on 17 Nov 2026 as a minimal single-column layout (theme in `.streamlit/config.toml`): a two-step analyse flow that remembers the last resume for the visit, a score ring with a one-line verdict and a "start here" gap, a Markdown report download, suggested coach questions and citation badges, and a score trend and delete confirmation in History. Driven headlessly with Streamlit's AppTest against the live API and a throwaway Firebase test account: sign-in, create-account and consent screens, the three tabs, an analysis, history, a live coach answer and the delete toggle render without errors. Screenshots were checked in Edge at desktop and phone widths. **Not yet clicked through by a person**; Google sign-in is enabled in the console but untried, because it needs a real Google account. The Admin tab was not rendered (no admin email set) |
+| Web front end (`web/`, plain HTML, CSS and JavaScript) and CORS for it | Built 17 Nov 2026; `tests/test_cors.py` passes. Driven in headless Edge with Playwright against the live API and the real Firebase project, with a throwaway email/password test account that the flow deletes at the end: sign-up refused without consent, then accepted; analyse button disabled until a resume and a 200+ character JD are given; analysis, report download, analysis rating, a live coach answer from a suggested question, history open and delete confirmation, account usage, no horizontal scroll at phone width, account deletion with password re-entry, and the deleted account can no longer sign in. All 21 checks passed. Google sign-in and the Admin page were not exercised |
 
 Observed on the fake test resume and JD from `tests/helpers.py`, with the real model: the
 same JD sent as pasted text, PDF and DOCX gave the same score, and the weak resume scored
@@ -52,9 +53,21 @@ pytest --cov=app --cov-report=term-missing     # tests use the hashing embedder,
 ruff check --fix . ; ruff format .              # lint and format once
 
 uvicorn app.main:app --reload                   # API on http://127.0.0.1:8000, docs at /docs
-streamlit run ui/streamlit_app.py               # UI, in a second terminal, from the repo root
+python -m http.server 5500 --directory web      # web front end: open http://localhost:5500
+streamlit run ui/streamlit_app.py               # or the older Streamlit UI, from the repo root
                                                 # (so it picks up .streamlit/config.toml)
 ```
+
+The web front end in `web/` is plain HTML, CSS and JavaScript with no build step: a
+landing page, sign-in and sign-up (Firebase's JavaScript SDK, so Google sign-in is a
+normal popup), the analyse flow, the coach, history, account, admin, privacy and terms
+pages. It reads the Firebase settings from the API's `/auth/config`. Open it at
+`localhost`, not `127.0.0.1`: Firebase allows `localhost` by default. The API only
+accepts browser calls from origins in `RESUMEFIT_CORS_ORIGINS`. Before publishing it
+(for example on Vercel, as a static site with `web/` as the root), set `API_URL` in
+`web/config.js` to the deployed API, add the site's domain to `RESUMEFIT_CORS_ORIGINS`
+and to Firebase's Authorized domains, and set `COACH_PROVIDER` if the coach uses a
+hosted model.
 
 Open the UI, create an account (the sign-up form shows the privacy note and asks for
 consent), and use it as before. The first API start downloads the embedding model (about 90 MB). To try the API without

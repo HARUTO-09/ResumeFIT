@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     drift_min_samples: int = 20
     rating_flag_below: float = 3.5
 
+    # Browser origins allowed to call the API (the web front end), comma-separated,
+    # e.g. "http://localhost:5500,https://resumefit.vercel.app". Empty = no CORS.
+    cors_origins: str = ""
+
     retention_days: int = 30
     log_level: str = "INFO"
 
@@ -104,6 +108,9 @@ class Settings(BaseSettings):
             drift_min_samples=self.drift_min_samples,
             rating_flag_below=self.rating_flag_below,
         )
+
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
 
     def admin_email_set(self) -> frozenset[str]:
         return frozenset(e.strip().lower() for e in self.admin_emails.split(",") if e.strip())
