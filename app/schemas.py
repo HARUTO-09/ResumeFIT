@@ -1,8 +1,9 @@
 """Response models (these also drive the OpenAPI docs at /docs)."""
 
 from datetime import datetime
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class _Model(BaseModel):
@@ -92,3 +93,72 @@ class CoachOut(_Model):
     reason: str | None = None
     model_version: str
     latency_ms: int
+
+
+# ---- accounts (Phase 3) -------------------------------------------------------------
+class AuthConfigOut(_Model):
+    project_id: str
+    api_key: str
+    auth_domain: str
+
+
+class RegisterIn(_Model):
+    consent: bool = Field(
+        description="The user has read the privacy note and agrees to their data being "
+        "processed as it describes. Registration fails without it."
+    )
+
+
+class UserOut(_Model):
+    id: str
+    email: str
+    email_verified: bool
+    is_admin: bool
+    sign_in_provider: str
+    consent_at: datetime
+    created_at: datetime
+
+
+class UsageOut(_Model):
+    day: str
+    analyses_used: int
+    analyses_limit: int
+    coach_used: int
+    coach_limit: int
+    resets_at: datetime
+
+
+class MeOut(UserOut):
+    usage: UsageOut
+
+
+# ---- feedback (Phase 3) -------------------------------------------------------------
+class FeedbackIn(_Model):
+    target_type: Literal["analysis", "coach_message"]
+    target_id: str = Field(max_length=32)
+    rating: int = Field(ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=1000)
+
+
+class FeedbackOut(_Model):
+    id: str
+    target_type: str
+    target_id: str
+    rating: int
+    comment: str | None
+    model_version: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# ---- admin (Phase 3) ----------------------------------------------------------------
+class AdminMetricsOut(_Model):
+    generated_at: datetime
+    window: dict[str, Any]
+    requests: dict[str, Any]
+    quota_hits: dict[str, Any]
+    usage: dict[str, Any]
+    scores: dict[str, Any]
+    ratings: dict[str, Any]
+    drift: dict[str, Any]
+    flags: list[str]

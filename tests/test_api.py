@@ -9,6 +9,7 @@ pytest.importorskip("sqlalchemy")
 
 from fastapi.testclient import TestClient  # noqa: E402
 from helpers import (  # noqa: E402
+    AUTH_SETTINGS,
     JD_TEXT,
     LEGACY_DOC,
     RESUME_TEXT,
@@ -16,6 +17,7 @@ from helpers import (  # noqa: E402
     make_pages_pdf,
     make_pdf,
     make_scanned_pdf,
+    sign_in,
 )
 
 from app.config import Settings  # noqa: E402
@@ -30,9 +32,12 @@ DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 @pytest.fixture()
 def client(tmp_path, embedder):
     settings = Settings(
-        database_url=f"sqlite:///{tmp_path / 'test.db'}", embedding_backend="hashing"
+        database_url=f"sqlite:///{tmp_path / 'test.db'}",
+        embedding_backend="hashing",
+        **AUTH_SETTINGS,
     )
     with TestClient(create_app(settings, embedder=embedder)) as c:
+        sign_in(c)  # Phase 3: every endpoint but /health needs a signed-in user
         yield c
 
 

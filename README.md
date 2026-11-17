@@ -2,9 +2,10 @@
 
 Scores a resume against a job description (JD), shows which skills match and which are
 missing, and suggests what to change in each weak section. A coach then answers follow-up
-questions using only the resume, the JD and a guidance library, with citations. This
-repository holds **Phase 1 (Matcher MVP)** and **Phase 2 (RAG coach)** of the PRD.
-Accounts, quotas and admin metrics (Phase 3) are planned and not built yet.
+questions using only the resume, the JD and a guidance library, with citations. Students
+sign in, see only their own work, have daily limits, can rate results and delete their
+account; an admin page tracks quality, latency, usage and score drift. This repository
+holds all three phases of the PRD: **Matcher MVP**, **RAG coach** and **SaaS-lite**.
 
 > The score is a guide to improving a resume, not a hiring decision, and it can be wrong.
 
@@ -21,11 +22,15 @@ Accounts, quotas and admin metrics (Phase 3) are planned and not built yet.
 | Dockerfile, local Docker build | **Not yet run locally.** Docker Desktop was installed on 17 Nov 2026, but its engine needs Windows' Virtual Machine Platform and WSL 2, which need a restart; the CI runner built the image |
 | Score quality with the real embedding model | **Not measured.** Needs your labelled pairs |
 | Phase 2 coach core: chunking, retrieval, guardrails, LLM client | Built; unit tests pass |
-| Phase 2 storage and API: `chunks`, `coach_messages`, `POST /coach`, `tests/test_api_coach.py` | Built; 118 tests pass in all, 97% line coverage of `app/` |
+| Phase 2 storage and API: `chunks`, `coach_messages`, `POST /coach`, `tests/test_api_coach.py` | Built; tests pass (see the Phase 3 API row for the current count) |
 | Coach with the real embedding model, retrieval-only | Smoke-tested by hand: `/health` reports 24 guidance documents; `/coach` returns cited passages, declines a hiring question, and answers "not in the sources" for an off-topic one. `eval/coach_eval.py` was run; see the results table |
 | Load test (`eval/load_test.py`, 2-page fake resume, laptop CPU) | Run on 17 Nov 2026; see the results table |
 | Coach with a real language model | Local qwen2.5:3b through Ollama, chosen from three local models (see "Choosing the coach model"). Evaluated and smoke-tested through `/coach`; it misses the PRD citation, faithfulness and latency targets on this laptop |
 | Coach chat in the Streamlit UI | Driven headlessly against the running API: a question is sent, the answer and a "Sources (5)" expander render |
+| Phase 3 core: Firebase token verification, the UI's Firebase REST client, monitoring and drift functions (17 Nov 2026) | Built; unit tests pass, against a local fake of Firebase's keys and endpoints |
+| Phase 3 API: Firebase sign-in, per-user isolation, quotas, feedback, admin metrics, request metrics; `tests/test_api_accounts.py`, `test_api_isolation.py`, `test_api_quotas.py`, `test_api_feedback_admin.py`; existing API tests now sign in | Built; 218 tests pass in all on this machine, 97% line coverage of `app/` |
+| Phase 3 API against the real Firebase project `resumefit-2b9f9` | Run on 17 Nov 2026 with two throwaway email/password test accounts (created through Firebase's REST API, then deleted): register refused without consent (422) and accepted with it; analysis and coach answer; rating and re-rating an analysis, rating a coach answer; the second account sees no analyses and gets 404 when reading, coaching on, rating or deleting the first account's analysis, and 403 on admin metrics; both accounts deleted (204), after which the token gets 403. All 21 checks passed |
+| Phase 3 Streamlit UI: Google and email sign-in through Firebase, consent step, ratings, account deletion, admin tab | Starts against the API configured for the real project; **not yet clicked through in a browser**. Google sign-in is enabled in the console but untried, because it needs a real Google account |
 
 Observed on the fake test resume and JD from `tests/helpers.py`, with the real model: the
 same JD sent as pasted text, PDF and DOCX gave the same score, and the weak resume scored
@@ -40,6 +45,8 @@ python -m venv .venv
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements-dev.txt
 copy .env.example .env
+# then in .env: set the RESUMEFIT_FIREBASE_* values (see "Firebase setup" below) and
+# put your own email in RESUMEFIT_ADMIN_EMAILS to see the Admin tab
 
 pytest --cov=app --cov-report=term-missing     # tests use the hashing embedder, no download
 ruff check --fix . ; ruff format .              # lint and format once
@@ -48,7 +55,8 @@ uvicorn app.main:app --reload                   # API on http://127.0.0.1:8000, 
 streamlit run ui/streamlit_app.py               # UI, in a second terminal
 ```
 
-The first API start downloads the embedding model (about 90 MB). To try the API without
+Open the UI, create an account (the sign-up form shows the privacy note and asks for
+consent), and use it as before. The first API start downloads the embedding model (about 90 MB). To try the API without
 the download, set `RESUMEFIT_EMBEDDING_BACKEND=hashing` in `.env`; scores from that
 backend are for plumbing checks only.
 
@@ -56,25 +64,67 @@ Docker:
 
 ```powershell
 docker build -t resumefit .
-docker run -p 8000:8000 -v resumefit-data:/data resumefit
+docker run -p 8000:8000 -v resumefit-data:/data --env-file .env resumefit
 ```
 
-## API (no login yet)
+## Firebase setup
+
+Sign-in is Firebase Authentication, project `resumefit-2b9f9`. Firebase handles
+passwords and Google accounts; the API only verifies the Firebase ID token sent with
+each request, using Google's public keys (no service account or Firebase Admin SDK).
+
+1. In the [Firebase console](https://console.firebase.google.com/), open the project,
+   then **Authentication > Sign-in method**, and enable **Email/Password** and **Google**.
+2. Under **Authentication > Settings > Authorized domains**, `localhost` is there by
+   default. Add the domain of any deployed UI before using it there.
+3. In `.env`, set `RESUMEFIT_FIREBASE_PROJECT_ID`, `RESUMEFIT_FIREBASE_API_KEY` and
+   `RESUMEFIT_FIREBASE_AUTH_DOMAIN` from the project's web app config. These are public
+   identifiers, not secrets, but they stay in `.env` rather than in the repository.
+4. Restart the API and the UI. The UI reads the settings from `GET /auth/config`.
+
+Google sign-in opens Google's window from a small Streamlit component
+(`ui/firebase_google/`) that loads Firebase's JavaScript SDK from Google's CDN; allow
+pop-ups for the UI's address. Email sign-in, password reset and verification emails go
+through Firebase's REST API (`ui/firebase_client.py`).
+
+## API
+
+Every endpoint except `/health` and `/auth/config` needs a header
+`Authorization: Bearer <Firebase ID token>`; without one it returns 401. A valid
+Firebase user who has not yet agreed to the privacy note gets 403
+`registration_required` until they call `POST /auth/register`.
 
 | Method and path | Purpose | Main responses |
 | --- | --- | --- |
 | `GET /health` | Liveness and model version | 200 |
+| `GET /auth/config` | Public Firebase web settings for the UI | 200 |
+| `POST /auth/register` | JSON `{"consent": true}`; creates the ResumeFit account for this Firebase user | 201 (new), 200 (exists), 401, 422 |
+| `GET /auth/me` | The signed-in user, verified-email and admin flags, today's quota use | 200, 401, 403 |
+| `DELETE /auth/me` | Deletes the account and all its data; needs a sign-in less than 5 minutes old | 204, 401 |
 | `POST /jd/extract` | Read a JD file (PDF or DOCX), return its text for preview; stores nothing | 200, 413, 415, 422 |
-| `POST /analyze` | Multipart: `resume` (PDF) plus exactly one of `jd_text` or `jd_file`; optional `store_resume_text`, `jd_source` | 201, 413, 415, 422 |
-| `GET /analyses` | List analyses, newest first | 200 |
-| `GET /analyses/{id}` | Read one analysis | 200, 404 |
-| `DELETE /analyses/{id}` | Delete an analysis, its coach messages and its stored passages | 204, 404 |
-| `POST /coach` | JSON `{"analysis_id", "question"}`; returns `answer`, `citations` and a `status` | 200, 404, 422, 503 |
+| `POST /analyze` | Multipart: `resume` (PDF) plus exactly one of `jd_text` or `jd_file`; optional `store_resume_text`, `jd_source` | 201, 413, 415, 422, 429 |
+| `GET /analyses` | List your analyses, newest first | 200 |
+| `GET /analyses/{id}` | Read one of your analyses | 200, 404 |
+| `DELETE /analyses/{id}` | Delete one of your analyses, its coach messages and its stored passages | 204, 404 |
+| `POST /coach` | JSON `{"analysis_id", "question"}`; returns `answer`, `citations` and a `status` | 200, 404, 422, 429, 503 |
+| `POST /feedback` | JSON `{"target_type": "analysis" or "coach_message", "target_id", "rating": 1-5, "comment"?}` | 201 (new), 200 (updated), 404, 422 |
+| `GET /admin/metrics?days=7` | Quality, latency, usage and drift for the last N days; admins only | 200, 401, 403 |
+
+Another user's analysis or coach answer is reported as 404, not 403, so its existence is
+not revealed. A 429 carries `limit`, `used` and `reset_at` in the error body and a
+`Retry-After` header.
 
 Every error has one shape: `{"error": {"code": "...", "message": "..."}}`.
 
 ```powershell
-curl.exe -X POST http://127.0.0.1:8000/analyze -F "resume=@resume.pdf" -F "jd_file=@jd.docx"
+# sign in to Firebase with email and password, then call the API with the ID token
+$key = (Invoke-RestMethod http://127.0.0.1:8000/auth/config).api_key
+$fb = Invoke-RestMethod -Method Post `
+  "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$key" `
+  -ContentType "application/json" `
+  -Body '{"email": "you@example.com", "password": "your password", "returnSecureToken": true}'
+curl.exe -X POST http://127.0.0.1:8000/analyze -H "Authorization: Bearer $($fb.idToken)" `
+  -F "resume=@resume.pdf" -F "jd_file=@jd.docx"
 ```
 
 ## How it works
@@ -144,6 +194,40 @@ question ─► scope check ─► retrieve top 5 ─► language model ─► g
 - **Not built** (the PRD marks these as cuttable): reranker, conversation memory, and the
   dense versus hybrid (BM25) retrieval experiment. Each question is answered on its own.
 
+## Accounts, quotas, feedback and monitoring (Phase 3)
+
+- **Accounts (F11).** Firebase Authentication does sign-up and sign-in, with Google or
+  with email and password, and issues a one-hour ID token that the UI refreshes. The
+  API checks each token with PyJWT: RS256 signature from Google's published Firebase
+  keys (cached), audience and issuer for this project, expiry, and sign-in time
+  (`app/core/security.py`). The ResumeFit account is created at `POST /auth/register`
+  only with `consent: true`, and the consent time is saved on the user row. Admin
+  rights need an email in `RESUMEFIT_ADMIN_EMAILS` that Firebase marks as verified, so
+  nobody can claim an admin's address by signing up with it unverified. Deleting the
+  account needs a sign-in less than 5 minutes old.
+- **Isolation (F12).** Every analysis, coach and feedback lookup goes through one
+  ownership check on `user_id`; `tests/test_api_isolation.py` tries every such route as a
+  second user. Analyses made before accounts existed have no owner and are visible to
+  nobody; the 30-day retention job removes them.
+- **Quotas (F13).** 20 analyses and 50 coach questions per user per UTC day by default
+  (`RESUMEFIT_QUOTA_*`). Only successful requests count: a rejected upload or a coach
+  call that fails because the model is down does not use the allowance.
+- **Feedback (F14).** A 1-5 rating and an optional comment on an analysis or a coach
+  answer, saved with that item's model version. Rating the same item again updates it.
+  Deleting the analysis keeps the rating for the trend but removes its link and comment.
+- **Admin metrics (F15).** `GET /admin/metrics` and the Admin tab in the UI, for emails
+  listed in `RESUMEFIT_ADMIN_EMAILS`: request counts by endpoint, p50/p95 latency of
+  successful `/analyze`, `/coach` and `/jd/extract` calls, server and client error rates,
+  quota hits per day, active users and top users (by pseudonymous id, no emails), the
+  score distribution and share of resumes with missing sections, and the rating trend.
+  Each request is recorded by route template (`/analyses/{analysis_id}`), status and
+  latency only.
+- **Drift check.** Each score is also written to an anonymous `score_events` table. The
+  admin page compares the latest 7 days with the first 7 days of scores and flags a mean
+  shift above 10 points or a two-sample KS test p-value below 0.01, needing at least 20
+  scores in each week. It also flags an average rating below 3.5 (from 5 ratings up) and
+  a server error rate above 1%. All thresholds are starting values in `.env`.
+
 **Privacy and safety controls**
 
 - File type is decided by content signature. Encrypted PDFs, `.docm`, legacy `.doc`,
@@ -163,7 +247,18 @@ question ─► scope check ─► retrieve top 5 ─► language model ─► g
   and contact details leaves the score unchanged.
 - Logs are JSON with a request id and metadata only (status, latency, score, band,
   model version, error code). A test checks that no resume or JD text reaches the log.
-- Analyses older than 30 days are deleted at startup.
+- Analyses older than 30 days are deleted at startup, with their passages and coach
+  messages; request metrics and usage rows older than that go too.
+- **Sign-in data sits with Firebase (Google)**: the email and either a password hash or
+  the Google identity. ResumeFit stores the Firebase user id, the email and the consent
+  time; it never sees passwords. `DELETE /auth/me` (after a fresh sign-in) deletes the
+  account with every analysis, passage, coach message, rating and usage row linked to
+  it, in one transaction, and the UI then deletes the Firebase user with the same token.
+- Kept after deletion, because they hold nothing that identifies anyone: anonymous score
+  events (score, band, count of missing sections, model version, time) for the drift
+  check, and request metrics (route, status, latency, time).
+- Feedback comments are redacted like coach questions. The admin page shows user ids,
+  never emails, and logs never carry emails (tested).
 
 ## Evaluation
 
@@ -251,9 +346,21 @@ coach answers as drafts and read the cited passages.
 
 ## Known limits
 
-- **No login in Phase 1.** Anyone who can reach the API can list and delete every
-  analysis. Run it locally or with test data only until Phase 3 adds accounts and
-  per-user isolation.
+- The Google sign-in component and the UI's sign-in screens have not been clicked
+  through in a browser yet; the API side was run against the real project. A popup blocked by the browser, Google sign-in not enabled in
+  the console, or an unauthorised domain each show a message in the UI.
+- Email verification is offered but not required, except for admin rights. Firebase's
+  own limits are the only guard against repeated sign-in attempts.
+- A Firebase ID token stays valid until it expires (up to an hour) even after signing
+  out; revoking sessions early needs the Firebase Admin SDK, which this project avoids.
+- If the UI cannot delete the Firebase user after the ResumeFit data is deleted, the
+  Firebase user remains with no data; signing in again asks for consent to a new,
+  empty account.
+- Quota counting is checked before the work and counted after it, so two requests racing
+  at the exact limit can both succeed. Quota days are UTC (05:30 in India).
+- The drift baseline is the first week of scores ever recorded. After a deliberate model
+  or threshold change, the page notes the version change; clear `score_events` to start a
+  new baseline.
 - The coach's retrieval threshold, prompt and scope rules are untested against a real
   model. The scope rules are keyword patterns and will miss rephrased requests.
 - Analyses created before Phase 2 have no stored passages; the coach answers those from
@@ -267,7 +374,9 @@ coach answers as drafts and read the cited passages.
 - Name and address redaction are heuristics based on the resume header.
 - English text only; scanned PDFs are rejected.
 - The retention job runs at startup only; a long-running deployment needs a scheduled run.
-- Tables are created directly at startup. Move to Alembic migrations before Phase 3.
+- Tables are created directly at startup. Phases 2 and 3 only added tables, so this
+  upgrades an existing database in place. Move to Alembic migrations before the first
+  change to an existing table, or before moving to PostgreSQL.
 
 ## Next steps
 
@@ -278,4 +387,6 @@ coach answers as drafts and read the cited passages.
 3. Add questions from real, consenting users to `eval/coach_questions.json` and rerun the
    coach evaluation; the current numbers are on 20 questions about one fake resume.
 4. Still open from Phase 1: labelled resume and JD pairs and threshold tuning.
-5. Phase 3: accounts, per-user isolation, quotas, feedback, admin metrics.
+5. Try Google and email sign-in in the UI in a browser, then open the Admin tab with
+   your verified email in `RESUMEFIT_ADMIN_EMAILS`.
+6. Rerun the load test, which now signs in through Firebase, with raised quotas.

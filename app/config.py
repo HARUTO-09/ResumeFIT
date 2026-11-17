@@ -8,7 +8,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.params import MB, CoachParams, DocumentLimits, ScoringParams
+from app.core.params import MB, CoachParams, DocumentLimits, MonitoringParams, ScoringParams
 
 
 class Settings(BaseSettings):
@@ -44,6 +44,32 @@ class Settings(BaseSettings):
     coach_top_k: int = 5
     coach_min_similarity: float = 0.25
 
+    # Accounts (Phase 3): sign-in is done by Firebase Authentication; the API only
+    # verifies Firebase ID tokens. The web API key and auth domain are public values
+    # that the UI needs; the API hands them out at /auth/config.
+    firebase_project_id: str = ""
+    firebase_api_key: str = ""
+    firebase_auth_domain: str = ""
+    # Google's public keys for Firebase tokens. Only tests point this elsewhere.
+    firebase_jwks_url: str = (
+        "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"
+    )
+    # Deleting the account needs a sign-in at most this many seconds old.
+    recent_login_seconds: int = 300
+    # Comma-separated emails that may open /admin/metrics (the email must be verified).
+    admin_emails: str = ""
+
+    # Daily quotas per user (PRD F13). Days are UTC.
+    quota_analyses_per_day: int = 20
+    quota_coach_per_day: int = 50
+
+    # Monitoring (PRD section 11): starting thresholds.
+    metrics_window_days: int = 7
+    drift_mean_shift: float = 10.0
+    drift_ks_alpha: float = 0.01
+    drift_min_samples: int = 20
+    rating_flag_below: float = 3.5
+
     retention_days: int = 30
     log_level: str = "INFO"
 
@@ -69,6 +95,18 @@ class Settings(BaseSettings):
 
     def coach(self) -> CoachParams:
         return CoachParams(top_k=self.coach_top_k, min_similarity=self.coach_min_similarity)
+
+    def monitoring(self) -> MonitoringParams:
+        return MonitoringParams(
+            window_days=self.metrics_window_days,
+            drift_mean_shift=self.drift_mean_shift,
+            drift_ks_alpha=self.drift_ks_alpha,
+            drift_min_samples=self.drift_min_samples,
+            rating_flag_below=self.rating_flag_below,
+        )
+
+    def admin_email_set(self) -> frozenset[str]:
+        return frozenset(e.strip().lower() for e in self.admin_emails.split(",") if e.strip())
 
 
 @lru_cache(maxsize=1)

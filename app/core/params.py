@@ -63,3 +63,18 @@ class CoachParams:
     reserve_user_sources: bool = True
     question_min_chars: int = 5
     question_max_chars: int = 500
+
+
+@dataclass(frozen=True)
+class MonitoringParams:
+    """Starting values from the PRD (section 11); adjust after real use."""
+
+    window_days: int = 7
+    # Drift: compare the latest week's scores with the first week's.
+    drift_mean_shift: float = 10.0
+    drift_ks_alpha: float = 0.01
+    # Fewer scores than this in either week: report "insufficient data", no verdict.
+    drift_min_samples: int = 20
+    rating_flag_below: float = 3.5
+    # Fewer ratings than this: no rating flag.
+    rating_min_count: int = 5

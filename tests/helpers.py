@@ -158,3 +158,41 @@ def cite_first_passage(system: str, user: str) -> str:
 
     first = re.search(r'<passage id="([RJG]\d+)"', user).group(1)
     return f"Add a line that shows this, with the tool and the result [{first}]."
+
+
+# ---- accounts (Phase 3): Firebase sign-in, faked with a local key -----------------
+from firebase_fake import JWKS_URL, PROJECT_ID, firebase_token  # noqa: E402
+
+# Settings every API test pins, so a developer's .env cannot change test behaviour.
+AUTH_SETTINGS = {
+    "firebase_project_id": PROJECT_ID,
+    "firebase_jwks_url": JWKS_URL,
+    "firebase_api_key": "test-web-api-key",
+    "firebase_auth_domain": "",
+    "admin_emails": "",
+    "quota_analyses_per_day": 1000,
+    "quota_coach_per_day": 1000,
+}
+
+
+def bearer(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def register(client, token: str, consent: bool = True):
+    return client.post("/auth/register", json={"consent": consent}, headers=bearer(token))
+
+
+def token_for(client, email="student@example.com", **token_kwargs) -> str:
+    """A Firebase-style token for this email, with its ResumeFit account registered."""
+    token = firebase_token(email, **token_kwargs)
+    response = register(client, token)
+    assert response.status_code in (200, 201), response.text
+    return token
+
+
+def sign_in(client, email="student@example.com") -> str:
+    """Make every later request from this client carry this user's token."""
+    token = token_for(client, email)
+    client.headers["Authorization"] = f"Bearer {token}"
+    return token

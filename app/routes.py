@@ -1,4 +1,9 @@
-"""Endpoints: /health, /jd/extract, /analyze, /analyses (Phase 1) and /coach (Phase 2).
+"""Endpoints: /health, /jd/extract, /analyze, /analyses (Phase 1), /coach (Phase 2)
+and /feedback (Phase 3). Accounts live in app/auth.py, admin metrics in app/admin.py.
+
+Everything except /health needs a signed-in user (see app/auth.py), and every
+analysis, coach message and feedback lookup is filtered by that user's id, so
+one user can never read, list, rate or delete another's data (PRD F12).
 
 Handlers are plain `def` functions, so FastAPI runs them in a thread pool and
 the CPU-bound parsing and embedding work does not block the event loop.
@@ -16,14 +21,26 @@ from app.core.llm import LLMUnavailable
 from app.core.pipeline import analyze_texts, model_version
 from app.core.redaction import redact
 from app.db import delete_analysis_data
+from app.deps import CurrentUser, current_user, get_session
 from app.errors import AppError
-from app.models import Analysis, CoachMessage, GuidanceDoc, new_analysis_id
+from app.models import (
+    Analysis,
+    CoachMessage,
+    Feedback,
+    GuidanceDoc,
+    ScoreEvent,
+    new_analysis_id,
+    utcnow,
+)
+from app.quotas import check_quota, count_use
 from app.schemas import (
     AnalysisOut,
     AnalysisSummary,
     Citation,
     CoachIn,
     CoachOut,
+    FeedbackIn,
+    FeedbackOut,
     HealthOut,
     JDExtractOut,
 )
@@ -32,11 +49,6 @@ from app.store import add_analysis_chunks, load_passages
 router = APIRouter()
 
 JD_SOURCES = ("text", "pdf", "docx")
-
-
-def get_session(request: Request):
-    with request.app.state.session_factory() as session:
-        yield session
 
 
 def read_upload(upload: UploadFile, max_bytes: int) -> bytes:
@@ -66,10 +78,11 @@ def to_out(row: Analysis) -> AnalysisOut:
     )
 
 
-def get_analysis_or_404(session: Session, analysis_id: str) -> Analysis:
-    # Phase 3: this becomes the one shared ownership check (filter on user_id).
+def get_analysis_or_404(session: Session, analysis_id: str, user_id: str) -> Analysis:
+    """The one shared ownership check. Another user's analysis is reported as not found,
+    so its existence is not revealed."""
     row = session.get(Analysis, analysis_id)
-    if row is None:
+    if row is None or row.user_id != user_id:
         raise AppError(404, "not_found", "Analysis not found.")
     return row
 
@@ -92,7 +105,11 @@ def health(request: Request, session: Session = Depends(get_session)):
 
 
 @router.post("/jd/extract", response_model=JDExtractOut)
-def jd_extract(request: Request, file: UploadFile = File(...)):
+def jd_extract(
+    request: Request,
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(current_user),
+):
     """Read a JD file and return its text for preview and editing. Nothing is stored."""
     limits = request.app.state.limits
     text, source = read_jd_file(read_upload(file, limits.jd_max_bytes), limits)
@@ -115,11 +132,13 @@ def analyze(
         None, description="Where edited jd_text came from: text, pdf or docx"
     ),
     store_resume_text: bool = Form(False, description="Opt in to storing the resume text"),
+    user: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ):
     state = request.app.state
     limits = state.limits
     started = time.perf_counter()
+    quota_day = check_quota(session, user.id, "analyses", state.settings.quota_analyses_per_day)
 
     has_text = bool(jd_text and jd_text.strip())
     has_file = jd_file is not None and bool(jd_file.filename)
@@ -152,6 +171,7 @@ def analyze(
 
     row = Analysis(
         id=new_analysis_id(),
+        user_id=user.id,
         jd_text=jd_clean,
         jd_source=source,
         resume_text=resume_text if store_resume_text else None,
@@ -174,6 +194,16 @@ def analyze(
     # Redacted resume passages and JD passages for the coach, saved with the analysis
     # in one transaction and deleted with it.
     add_analysis_chunks(session, row.id, resume_text, jd_clean, state.embedder, state.coach)
+    # Anonymous copy of the score for the weekly drift check; kept after the analysis expires.
+    session.add(
+        ScoreEvent(
+            score=result.score,
+            band=result.band,
+            sections_missing=len(result.sections_missing),
+            model_version=result.model_version,
+        )
+    )
+    count_use(session, user.id, "analyses", quota_day)
     session.commit()
 
     request.state.log = {
@@ -188,10 +218,17 @@ def analyze(
 
 
 @router.get("/analyses", response_model=list[AnalysisSummary])
-def list_analyses(session: Session = Depends(get_session), limit: int = 50):
+def list_analyses(
+    user: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+    limit: int = 50,
+):
     limit = max(1, min(limit, 200))
     rows = session.scalars(
-        select(Analysis).order_by(Analysis.created_at.desc(), Analysis.id.desc()).limit(limit)
+        select(Analysis)
+        .where(Analysis.user_id == user.id)
+        .order_by(Analysis.created_at.desc(), Analysis.id.desc())
+        .limit(limit)
     ).all()
     return [
         AnalysisSummary(
@@ -208,27 +245,41 @@ def list_analyses(session: Session = Depends(get_session), limit: int = 50):
 
 
 @router.get("/analyses/{analysis_id}", response_model=AnalysisOut)
-def read_analysis(analysis_id: str, session: Session = Depends(get_session)):
-    return to_out(get_analysis_or_404(session, analysis_id))
+def read_analysis(
+    analysis_id: str,
+    user: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+):
+    return to_out(get_analysis_or_404(session, analysis_id, user.id))
 
 
 @router.delete("/analyses/{analysis_id}", status_code=204, response_class=Response)
-def delete_analysis(analysis_id: str, session: Session = Depends(get_session)):
-    row = get_analysis_or_404(session, analysis_id)
-    # The analysis, its coach messages and its vector chunks go in one transaction.
+def delete_analysis(
+    analysis_id: str,
+    user: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+):
+    row = get_analysis_or_404(session, analysis_id, user.id)
+    # The analysis, its coach messages and its vector chunks go in one transaction;
+    # feedback on it is unlinked (see app/db.py).
     delete_analysis_data(session, [row.id])
     session.commit()
     return Response(status_code=204)
 
 
 @router.post("/coach", response_model=CoachOut)
-def coach(request: Request, body: CoachIn, session: Session = Depends(get_session)):
+def coach(
+    request: Request,
+    body: CoachIn,
+    user: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+):
     """Ask a question about one analysis. Answers come only from the sources, with citations."""
     state = request.app.state
     params = state.coach
     started = time.perf_counter()
 
-    row = get_analysis_or_404(session, body.analysis_id)
+    row = get_analysis_or_404(session, body.analysis_id, user.id)
     question = normalise_text(body.question)
     if not params.question_min_chars <= len(question) <= params.question_max_chars:
         raise AppError(
@@ -237,6 +288,7 @@ def coach(request: Request, body: CoachIn, session: Session = Depends(get_sessio
             f"The question must be {params.question_min_chars} to "
             f"{params.question_max_chars} characters.",
         )
+    quota_day = check_quota(session, user.id, "coach", state.settings.quota_coach_per_day)
 
     passages, vectors = load_passages(session, row.id, state.embedder)
     try:
@@ -253,9 +305,14 @@ def coach(request: Request, body: CoachIn, session: Session = Depends(get_sessio
     version = coach_model_version(state)
     cited_ids = [p.id for p in result.citations]
     # Contact details typed into a question are not stored.
-    session.add(CoachMessage(analysis_id=row.id, role="user", content=redact(question).text))
+    session.add(
+        CoachMessage(
+            analysis_id=row.id, user_id=user.id, role="user", content=redact(question).text
+        )
+    )
     reply = CoachMessage(
         analysis_id=row.id,
+        user_id=user.id,
         role="assistant",
         content=result.answer,
         cited_passage_ids=cited_ids,
@@ -263,6 +320,8 @@ def coach(request: Request, body: CoachIn, session: Session = Depends(get_sessio
         model_version=version,
     )
     session.add(reply)
+    # A failed model call (503 above) is not counted against the quota.
+    count_use(session, user.id, "coach", quota_day)
     session.commit()
 
     request.state.log = {
@@ -284,4 +343,65 @@ def coach(request: Request, body: CoachIn, session: Session = Depends(get_sessio
         reason=result.reason,
         model_version=version,
         latency_ms=int((time.perf_counter() - started) * 1000),
+    )
+
+
+@router.post("/feedback", response_model=FeedbackOut, status_code=201)
+def feedback(
+    body: FeedbackIn,
+    response: Response,
+    user: CurrentUser = Depends(current_user),
+    session: Session = Depends(get_session),
+):
+    """Rate one of your analyses or coach answers from 1 to 5 (PRD F14).
+
+    Rating the same item again updates the earlier rating (200 instead of 201).
+    The comment is optional; contact details in it are redacted before storage.
+    """
+    if body.target_type == "analysis":
+        analysis = get_analysis_or_404(session, body.target_id, user.id)
+        analysis_id, model_version = analysis.id, analysis.model_version
+    else:
+        message = session.get(CoachMessage, body.target_id)
+        if message is None or message.user_id != user.id or message.role != "assistant":
+            raise AppError(404, "not_found", "Coach answer not found.")
+        analysis_id, model_version = message.analysis_id, message.model_version or "unknown"
+
+    comment = None
+    if body.comment and body.comment.strip():
+        comment = redact(normalise_text(body.comment)).text
+
+    now = utcnow()
+    row = session.scalars(
+        select(Feedback).where(
+            Feedback.user_id == user.id,
+            Feedback.target_type == body.target_type,
+            Feedback.target_id == body.target_id,
+        )
+    ).first()
+    if row is None:
+        row = Feedback(
+            user_id=user.id,
+            target_type=body.target_type,
+            target_id=body.target_id,
+            analysis_id=analysis_id,
+            created_at=now,
+        )
+        session.add(row)
+    else:
+        response.status_code = 200
+    row.rating = body.rating
+    row.comment = comment
+    row.model_version = model_version
+    row.updated_at = now
+    session.commit()
+    return FeedbackOut(
+        id=row.id,
+        target_type=row.target_type,
+        target_id=row.target_id,
+        rating=row.rating,
+        comment=row.comment,
+        model_version=row.model_version,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )

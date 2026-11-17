@@ -8,7 +8,15 @@ pytest.importorskip("httpx")
 pytest.importorskip("sqlalchemy")
 
 from fastapi.testclient import TestClient  # noqa: E402
-from helpers import JD_TEXT, RESUME_TEXT, FakeLLM, cite_first_passage, make_pdf  # noqa: E402
+from helpers import (  # noqa: E402
+    AUTH_SETTINGS,
+    JD_TEXT,
+    RESUME_TEXT,
+    FakeLLM,
+    cite_first_passage,
+    make_pdf,
+    sign_in,
+)
 from sqlalchemy import func, select  # noqa: E402
 
 from app.config import Settings  # noqa: E402
@@ -33,11 +41,12 @@ def make_client(tmp_path, embedder):
             embedding_backend="hashing",
             # the hashing embedder gives lower similarities than a real model
             coach_min_similarity=overrides.pop("coach_min_similarity", 0.05),
-            **overrides,
+            **{**AUTH_SETTINGS, **overrides},
         )
         client = TestClient(create_app(settings, embedder=embedder, llm=llm))
         client.__enter__()
         opened.append(client)
+        sign_in(client)  # Phase 3: /analyze and /coach need a signed-in user
         return client
 
     yield build

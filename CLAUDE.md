@@ -2,7 +2,7 @@
 
 ResumeFit scores a resume against a job description and explains the gaps. The PRD has
 three phases: 1 Matcher MVP, 2 RAG coach, 3 SaaS-lite (accounts, quotas, admin metrics).
-Phases 1 and 2 are written. README.md has the architecture, API table and known limits.
+All three are written. README.md has the architecture, API table and known limits.
 
 ## Current state (17 Nov 2026, evening)
 
@@ -43,19 +43,54 @@ Phases 1 and 2 are written. README.md has the architecture, API table and known 
   A Windows restart is needed before Docker can start; then run `docker build -t
   resumefit .` and record the result in README.
 
+## Phase 3 added on 17 Nov 2026 (written outside this machine, API not yet run here)
+
+- Sign-in is **Firebase Authentication** (owner's request, 17 Nov), project
+  `resumefit-2b9f9`, Google and email/password. The first draft's own passwords and
+  HS256 tokens were replaced the same day and never ran here.
+- Tested in the authoring sandbox (39 tests, ruff clean): `app/core/security.py`
+  (Firebase ID token verification with PyJWT against Google's keys),
+  `app/core/monitoring.py`, `ui/firebase_client.py` (Firebase REST: sign-in, sign-up,
+  refresh, reset, verify email, delete); `tests/test_security.py`,
+  `tests/test_monitoring.py`, `tests/test_firebase_client.py`. `tests/firebase_fake.py`
+  signs fake Firebase tokens with a local key served on 127.0.0.1.
+- **Never executed:** `app/deps.py`, `app/auth.py` (/auth/config, /auth/register, GET
+  and DELETE /auth/me), `app/quotas.py`, `app/admin.py`, and the changes to
+  `app/routes.py`, `app/models.py`, `app/db.py`, `app/main.py`, `app/config.py`,
+  `app/schemas.py`, `app/errors.py`; the API test files `tests/test_api_accounts.py`,
+  `test_api_isolation.py`, `test_api_quotas.py`, `test_api_feedback_admin.py`, the
+  `make_api` fixture and the sign-in in `tests/test_api.py` and `test_api_coach.py`; the
+  Streamlit sign-in, consent, ratings, account and admin code; the Google component
+  `ui/firebase_google/index.html`; Firebase sign-in in `eval/load_test.py`.
+- New dependency `pyjwt[crypto]` in `requirements.txt`; the venv may not have it yet.
+- 17 Nov evening: `pip install -r requirements.txt` done; 218 tests pass (97%), ruff clean.
+  `.env` now has the Firebase project id, web API key and auth domain. Probed via the
+  Identity Toolkit REST API: Google sign-in is enabled; Email/Password is disabled
+  (PASSWORD_LOGIN_DISABLED), so the owner must enable it before step 2 can finish. With the real API running, `/auth/config` answers
+  and `/auth/me` returns 401 for no token and for a bad token. `RESUMEFIT_ADMIN_EMAILS`
+  is not set.
+- Firebase console: Google and Email/Password both enabled (17 Nov evening).
+- Live API run against the real project with two throwaway test accounts (created and
+  deleted again): consent, analysis, coach, ratings, isolation, admin 403 and account
+  deletion all passed (21/21). Script: scratchpad `account_flow.py` (not in the repo).
+  The UI's sign-in screens, especially Google, still need a click-through in a browser.
+
 ## Do next, in order
 
-1. After the owner restarts Windows: start Docker Desktop, run the local Docker build,
-   and update README Status.
-2. Owner decides whether to move the coach to a hosted model to meet the targets; that
-   needs an API key, a cost decision and a privacy note naming the provider.
-3. Collect consenting resumes, labelled pairs and real coach questions under `eval/`;
-   rerun both evaluations before quoting any quality number.
+1. Done 17 Nov: requirements installed, 218 tests pass, ruff clean. Keep the isolation,
+   token and privacy tests as strict as written.
+2. API flow done against the real project (see above). Still to do: the owner clicks
+   through Google and email sign-in, consent, ratings and deletion in the UI in a
+   browser. Update README Status with what was actually run.
+3. Ask the owner which email to put in `RESUMEFIT_ADMIN_EMAILS`, then check the Admin tab.
+4. Rerun `eval/load_test.py` with raised quotas and compare with the 17 Nov numbers.
+5. Still open: Docker build after the Windows restart, hosted-model decision for the coach,
+   labelled pairs and real coach questions.
 
 Stop and ask the owner before: deploying, sending any text to a third-party model,
-switching the coach to a hosted provider, starting Phase 3, or changing scoring weights
-or thresholds (those are tuned on data, not by feel). Pushing to `origin main` is
-approved.
+switching the coach to a hosted provider, creating or deleting Firebase users other
+than test accounts, or changing scoring weights or thresholds (those are tuned on data,
+not by feel). Pushing to `origin main` is approved.
 
 ## Rules for this repo
 
