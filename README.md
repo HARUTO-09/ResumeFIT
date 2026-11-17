@@ -25,7 +25,7 @@ holds all three phases of the PRD: **Matcher MVP**, **RAG coach** and **SaaS-lit
 | Phase 2 storage and API: `chunks`, `coach_messages`, `POST /coach`, `tests/test_api_coach.py` | Built; tests pass (see the Phase 3 API row for the current count) |
 | Coach with the real embedding model, retrieval-only | Smoke-tested by hand: `/health` reports 24 guidance documents; `/coach` returns cited passages, declines a hiring question, and answers "not in the sources" for an off-topic one. `eval/coach_eval.py` was run; see the results table |
 | Load test (`eval/load_test.py`, 2-page fake resume, laptop CPU) | Run on 17 Nov 2026; see the results table |
-| Coach with a real language model | Local qwen2.5:3b through Ollama, chosen from three local models (see "Choosing the coach model"). Evaluated and smoke-tested through `/coach`; it misses the PRD citation, faithfulness and latency targets on this laptop |
+| Coach with a real language model | Since 17 Nov 2026, Google's `gemini-3.5-flash-lite` (Gemini API free tier); before that, local qwen2.5:3b through Ollama. Gemini was evaluated on the draft set and answered through `/coach` in the web front end's browser flow (see "Choosing the coach model") |
 | Coach chat in the Streamlit UI | Driven headlessly against the running API: a question is sent, the answer and a "Sources (5)" expander render |
 | Phase 3 core: Firebase token verification, the UI's Firebase REST client, monitoring and drift functions (17 Nov 2026) | Built; unit tests pass, against a local fake of Firebase's keys and endpoints |
 | Phase 3 API: Firebase sign-in, per-user isolation, quotas, feedback, admin metrics, request metrics; `tests/test_api_accounts.py`, `test_api_isolation.py`, `test_api_quotas.py`, `test_api_feedback_admin.py`; existing API tests now sign in | Built; 222 tests pass in all on this machine (with `tests/test_cors.py`), 97% line coverage of `app/` |
@@ -252,8 +252,13 @@ question ─► scope check ─► retrieve top 5 ─► language model ─► g
   dropped; email, phone, links, name and address lines removed) and are deleted with the
   analysis. Tell your testers this.
 - Only redacted passages and a redacted question are sent to a language model. **Third-party
-  model provider: none.** The configured model (qwen2.5:3b) runs locally in Ollama, so no
-  text leaves the machine. If you switch to a hosted provider, name it here and in the UI.
+  model provider: Google, Gemini API free tier** (`gemini-3.5-flash-lite`, since 17 Nov
+  2026, chosen by the owner for speed). Under the free tier's terms Google may use this
+  text to improve its products and people at Google may read it; the sign-up privacy note
+  and the web front end's Privacy page say so (`COACH_PROVIDER` in `web/config.js`). Before
+  that the coach ran qwen2.5:3b locally in Ollama with no text leaving the machine; set
+  `RESUMEFIT_LLM_*` back to that to return to it. The Streamlit UI's privacy note does not
+  name the provider; it shows the model in use.
 - Coach questions are stored redacted; logs carry the answer status and counts, never the
   question, answer or passage text.
 - The resume header (name, contact details, address) is excluded from scoring, and email,
@@ -357,6 +362,27 @@ figure nobody measured. No local model here meets the PRD's citation, faithfulne
 latency targets. The likely way to meet them is a larger hosted model, which needs an API
 key, a cost decision and a privacy note naming the provider. Until then, treat generated
 coach answers as drafts and read the cited passages.
+
+**Switched to a hosted model (17 Nov 2026, evening).** The owner chose Google's Gemini API
+free tier for speed. It plugs into the existing `openai-compatible` client with
+`RESUMEFIT_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai`. The
+larger Flash models (`gemini-3.8-flash`, `gemini-3.5-flash`, `gemini-flash-latest`)
+answered 503 "high demand" on the free tier when tried, and `gemini-2.5-flash` is closed
+to new users, so the pinned `gemini-3.5-flash-lite` is configured, with a 20 s timeout.
+Same 30-question draft set, coach 0.3.0:
+
+| Model | Cited answers | Faithful, of those shown | p50 / p95 latency |
+| --- | --- | --- | --- |
+| qwen2.5:3b, local (before) | 17/20 | 13/17 | 17.9 s / 39.8 s |
+| **gemini-3.5-flash-lite, hosted (now)** | **20/20** | **19/20** | **1.5 s / 8.2 s** |
+
+Retrieval hit rate and refusal accuracy stayed at 100%. The faithfulness column for Gemini
+was judged by Claude (the coding assistant), not by the owner: one answer turned the
+guide's example bullet into a suggested line with details the resume passage does not
+have. Another repeated the guide's "120 ms" example but added "using only numbers you
+actually measure". Recheck by hand before quoting these numbers. The free tier has rate
+limits; when the model is overloaded or limited, `/coach` returns 503 and the matcher keeps
+working.
 
 ## Known limits
 

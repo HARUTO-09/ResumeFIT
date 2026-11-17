@@ -84,12 +84,11 @@ All three are written. README.md has the architecture, API table and known limit
 - API has CORS from `RESUMEFIT_CORS_ORIGINS` (`.env` has `http://localhost:5500`).
   222 tests pass, 97%, ruff clean. Browser flow (scratchpad `web_flow.py`, Playwright with
   Edge) passed 21/21 with a throwaway test account it deletes.
-- Coach: the owner chose a hosted model for speed, Google Gemini if free. Not configured
-  yet: needs their AI Studio API key and their OK on the free tier's data terms. Gemini
-  works through the existing `openai-compatible` client (base URL
-  `https://generativelanguage.googleapis.com/v1beta/openai/`). When switched: update
-  README Privacy ("Third-party model provider"), `COACH_PROVIDER` and its note in
-  `web/config.js`.
+- Coach: switched on the owner's request to Google Gemini API free tier,
+  `gemini-3.5-flash-lite` (key in `.env` only, never commit it). Bigger Flash models gave
+  503 "high demand". Eval: 20/20 cited, 19/20 faithful (Claude's reading, not the
+  owner's), p50 1.5 s, p95 8.2 s. README Privacy and `web/config.js` name Google.
+  Answers CSV in scratchpad `coach_answers_gemini.csv`. Ollama is no longer needed.
 - Planned free stack, not deployed: `web/` on Vercel Hobby, API on Hugging Face Spaces
   (Docker, free CPU), Neon Postgres (needs `psycopg` added and a test run on Postgres).
 

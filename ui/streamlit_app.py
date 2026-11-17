@@ -423,7 +423,8 @@ def show_consent() -> None:
 BAND_COLOR = {"strong": "#059669", "partial": "#d97706", "weak": "#dc2626"}
 BAND_WORDS = {"strong": "Strong match", "partial": "Partial match", "weak": "Weak match"}
 SOURCE_NAMES = {"resume": "Your resume", "jd": "Job description", "guidance": "Guide"}
-CITATION = re.compile(r"\[([RJG]\d+)\]")
+# [R3] or grouped [G36, J13]; the same pattern as app/core/guardrails.py
+CITATION = re.compile(r"\[\s*([RJG]\d+(?:\s*[,;]\s*[RJG]\d+)*)\s*\]")
 
 
 def show_rating(target_type: str, target_id: str, prompt: str, where: str) -> None:
@@ -615,7 +616,12 @@ def show_analysis(a: dict, where: str) -> None:
 
 def answer_html(text: str) -> str:
     """Escape the model's text and show [R12]-style citations as small badges."""
-    return CITATION.sub(r'<span class="rf-cite">\1</span>', esc(text))
+    return CITATION.sub(
+        lambda m: "".join(
+            f'<span class="rf-cite">{i}</span>' for i in re.split(r"\s*[,;]\s*", m.group(1))
+        ),
+        esc(text),
+    )
 
 
 def suggested_questions(a: dict) -> list[str]:

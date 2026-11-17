@@ -657,7 +657,15 @@ function suggestedQuestions(a) {
   return q.slice(0, 4);
 }
 
-const answerHtml = (text) => esc(text).replace(/\[([RJG]\d+)\]/g, '<span class="cite">$1</span>');
+// [R3] and grouped [G36, J13] citations become small badges (same pattern as
+// app/core/guardrails.py, which checks that each id was retrieved)
+const answerHtml = (text) =>
+  esc(text).replace(/\[\s*([RJG]\d+(?:\s*[,;]\s*[RJG]\d+)*)\s*\]/g, (_, ids) =>
+    ids
+      .split(/\s*[,;]\s*/)
+      .map((id) => `<span class="cite">${id}</span>`)
+      .join(""),
+  );
 
 function coachHtml(a) {
   const turns = S.coach.get(a.id) || [];
