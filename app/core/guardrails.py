@@ -56,6 +56,9 @@ DECLINE_MESSAGES = {
 }
 
 _CITATION = re.compile(r"\[\s*((?:[RJG]\d+)(?:\s*[,;]\s*[RJG]\d+)*)\s*\]")
+# Anything shaped like a citation id, e.g. [Q1] or [S12], whatever the letter. A model
+# that invents an id outside R/J/G has still cited something that was not retrieved.
+_CITATION_LIKE = re.compile(r"\[\s*([A-Z]{1,2}\d+)\s*\]")
 
 
 def scope_check(question: str) -> str | None:
@@ -84,13 +87,19 @@ def check_grounded(answer: str, retrieved_ids: set[str]) -> tuple[str, list[str]
       "ok"                 at least one citation, and every cited id was retrieved
       "not_in_sources"     the model said the sources do not cover the question
       "no_citation"        rejected: claims without any citation
-      "unknown_citation"   rejected: cites an id that was not retrieved
+      "unknown_citation"   rejected: cites an id that was not retrieved, including an
+                           invented id outside the R/J/G scheme such as [Q1]
+      "contradictory"      rejected: says "not in the sources" yet cites a passage
     """
     cited = extract_citations(answer)
-    if any(pid not in retrieved_ids for pid in cited):
+    invented = [m.group(1) for m in _CITATION_LIKE.finditer(answer)]
+    if any(pid not in retrieved_ids for pid in [*cited, *invented]):
         return "unknown_citation", cited
+    says_not_found = NOT_IN_SOURCES in answer.lower()
     if not cited:
-        if NOT_IN_SOURCES in answer.lower():
+        if says_not_found:
             return "not_in_sources", []
         return "no_citation", []
+    if says_not_found:
+        return "contradictory", cited
     return "ok", cited

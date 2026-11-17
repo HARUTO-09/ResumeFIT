@@ -140,6 +140,15 @@ def test_citation_parsing_and_groundedness():
     assert check_grounded("Not in the sources.", {"G3"})[0] == "not_in_sources"
 
 
+def test_invented_ids_and_contradictions_are_rejected():
+    # an id outside the R/J/G scheme was never retrieved
+    assert check_grounded("[Q1] [R6] You monitored drift.", {"R6"})[0] == "unknown_citation"
+    # "not in the sources" while citing a passage that holds the answer
+    assert check_grounded("Not in the sources. [J11]", {"J11"})[0] == "contradictory"
+    # ordinary prose in brackets is not mistaken for a citation
+    assert check_grounded("Use a [short] summary [R1].", {"R1"}) == ("ok", ["R1"])
+
+
 # ---- retrieval and answers (F9) -----------------------------------------------------
 @pytest.fixture(scope="module")
 def corpus(embedder):

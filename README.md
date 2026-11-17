@@ -17,13 +17,14 @@ Accounts, quotas and admin metrics (Phase 3) are planned and not built yet.
 | Lint (`ruff check`, `ruff format`) | Clean |
 | API with the real model (all-MiniLM-L6-v2) | Smoke-tested by hand: every endpoint and the error paths behave as in the table below |
 | Streamlit UI | Loads against the running API and lists saved analyses; the upload flow was not exercised in a browser |
-| Dockerfile, GitHub Actions workflow | Written; **not yet run** (Docker is not installed on the dev machine; CI has not run) |
+| GitHub Actions workflow | Green on the first push to `github.com/HARUTO-09/ResumeFIT` (17 Nov 2026): lint, tests with coverage gate, Docker build on the runner |
+| Dockerfile, local Docker build | **Not yet run locally.** Docker Desktop was installed on 17 Nov 2026, but its engine needs Windows' Virtual Machine Platform and WSL 2, which need a restart; the CI runner built the image |
 | Score quality with the real embedding model | **Not measured.** Needs your labelled pairs |
 | Phase 2 coach core: chunking, retrieval, guardrails, LLM client | Built; unit tests pass |
-| Phase 2 storage and API: `chunks`, `coach_messages`, `POST /coach`, `tests/test_api_coach.py` | Built; 117 tests pass in all, 97% line coverage of `app/` |
+| Phase 2 storage and API: `chunks`, `coach_messages`, `POST /coach`, `tests/test_api_coach.py` | Built; 118 tests pass in all, 97% line coverage of `app/` |
 | Coach with the real embedding model, retrieval-only | Smoke-tested by hand: `/health` reports 24 guidance documents; `/coach` returns cited passages, declines a hiring question, and answers "not in the sources" for an off-topic one. `eval/coach_eval.py` was run; see the results table |
 | Load test (`eval/load_test.py`, 2-page fake resume, laptop CPU) | Run on 17 Nov 2026; see the results table |
-| Coach with a real language model | **Not run.** No provider is configured; answer quality is unmeasured |
+| Coach with a real language model | Local qwen2.5:3b through Ollama, chosen from three local models (see "Choosing the coach model"). Evaluated and smoke-tested through `/coach`; it misses the PRD citation, faithfulness and latency targets on this laptop |
 | Coach chat in the Streamlit UI | Driven headlessly against the running API: a question is sent, the answer and a "Sources (5)" expander render |
 
 Observed on the fake test resume and JD from `tests/helpers.py`, with the real model: the
@@ -153,7 +154,8 @@ question ─► scope check ─► retrieve top 5 ─► language model ─► g
   dropped; email, phone, links, name and address lines removed) and are deleted with the
   analysis. Tell your testers this.
 - Only redacted passages and a redacted question are sent to a language model. **Third-party
-  model provider: none configured.** If you set one, name it here and in the UI.
+  model provider: none.** The configured model (qwen2.5:3b) runs locally in Ollama, so no
+  text leaves the machine. If you switch to a hosted provider, name it here and in the UI.
 - Coach questions are stored redacted; logs carry the answer status and counts, never the
   question, answer or passage text.
 - The resume header (name, contact details, address) is excluded from scoring, and email,
@@ -195,13 +197,13 @@ python -m eval.load_test --resume resume.pdf --jd jd.txt --requests 30 --concurr
 | --- | --- | --- |
 | Coach retrieval hit rate at 5, answerable questions (draft set, fake sample data) | none set | 100% (20/20), real embedding model, retrieval-only, threshold 0.25, 17 Nov 2026. It was 55% (11/20) before the passage-size and reserved-slot change described above |
 | Coach refusal accuracy, all 30 draft questions | none set | 100% (30/30), same run |
-| Coach answers that cite a source passage | ≥ 90% | not measured (needs a language model; retrieval-only answers always show their passages) |
-| Coach answers judged faithful (manual) | ≥ 85% | not measured |
-| Coach answer p95 latency | < 8 s | retrieval-only, laptop CPU, 17 Nov 2026: 34 ms at concurrency 1 (20 requests), 160 ms at concurrency 4 (30 requests). Not measured with a language model |
+| Coach answers that cite a source passage | ≥ 90% | 85% (17/20), qwen2.5:3b local, coach 0.3.0, 17 Nov 2026. **Below target** |
+| Coach answers judged faithful (manual) | ≥ 85% | 76% (13 of the 17 shown answers), same run, checked by hand against the cited passages. **Below target** |
+| Coach answer p95 latency | < 8 s | qwen2.5:3b on a laptop CPU, one question at a time: p50 17.9 s, p95 39.8 s. **Above target.** Retrieval-only: p95 34 ms at concurrency 1, 160 ms at concurrency 4 |
 | Band agreement with human labels, held-out pairs | ≥ 70% | not measured |
 | Gain over keyword baseline | ≥ 10 points | not measured |
 | `/analyze` p95 latency, 2-page resume | < 3 s | fake 2-page resume, laptop CPU, 17 Nov 2026: p50 720 ms and p95 767 ms at concurrency 1 (20 requests); p50 1692 ms and p95 2019 ms at concurrency 4 (30 requests). Measured end to end from the client, after one warm-up call |
-| Test coverage, core modules | ≥ 80% | 97% of `app/` lines (117 tests, hashing embedder, 17 Nov 2026) |
+| Test coverage, core modules | ≥ 80% | 97% of `app/` lines (118 tests, hashing embedder, 17 Nov 2026) |
 
 Fill this table only with numbers you have run.
 
@@ -214,6 +216,38 @@ off-topic questions scored at most 0.18 against any passage. Chunking the resume
 gave 20/20. Twenty questions on one fake resume is a small set, so treat this as a sanity
 check rather than a result; the question set itself was reviewed on 17 Nov 2026 and every
 gold passage exists in the sources.
+
+### Choosing the coach model (17 Nov 2026)
+
+The constraint was a laptop with an Intel i7-1355U CPU, 16 GB RAM, no usable GPU and no
+hosted-model API key, so the candidates were small open models running locally in Ollama.
+All runs used the 30-question draft set, the real embedding model and retrieval with the
+reserved resume and JD slots. Faithfulness was judged by hand against the cited passages.
+
+| Model, coach version | Cited answers | Faithful, of those shown | p50 / p95 latency |
+| --- | --- | --- | --- |
+| qwen2.5:3b, 0.2.0 | 19/20 | 15/19 | 16.5 s / 37.0 s |
+| llama3.2:3b, 0.2.0 | 18/20 | 11/18 | 18.4 s / 27.9 s |
+| qwen2.5:1.5b, 0.3.0 with extra prompt rules | 5/20 | not checked | 6.8 s / 18.0 s |
+| qwen2.5:3b, 0.3.0 with extra prompt rules | 15/20 | 10/15 | 18.1 s / 37.0 s |
+| **qwen2.5:3b, 0.3.0 (chosen)** | **17/20** | **13/17** | **17.9 s / 39.8 s** |
+
+All five runs kept 100% retrieval hit rate and 100% refusal accuracy. qwen2.5:3b is the
+best of these and is the configured model. llama3.2:3b invented facts, such as listing
+SQLite as a database the student used. qwen2.5:1.5b mostly failed to cite. Two extra prompt
+rules, which said guidance examples are not the student's work and that "not in the
+sources" is only for unanswerable questions, made qwen2.5:3b worse, so they were removed.
+
+Coach 0.3.0 tightens the groundedness check. An answer that cites an id outside the R/J/G
+scheme, such as `[Q1]`, is rejected. So is an answer that says "not in the sources" while
+citing a passage. Both happened with qwen2.5:3b, and both are now shown as passages only.
+
+The remaining failure is the one that matters most for students. The model sometimes turns
+a guidance example into a suggestion that the student claim it, including a "120 ms"
+figure nobody measured. No local model here meets the PRD's citation, faithfulness or
+latency targets. The likely way to meet them is a larger hosted model, which needs an API
+key, a cost decision and a privacy note naming the provider. Until then, treat generated
+coach answers as drafts and read the cited passages.
 
 ## Known limits
 
@@ -237,10 +271,11 @@ gold passage exists in the sources.
 
 ## Next steps
 
-1. Choose a language model, configure it in `.env`, rerun the evaluation, and do the manual
-   faithfulness check on `eval/coach_answers.csv`. Fill the results table.
-2. Add questions from real, consenting users to `eval/coach_questions.json` and rerun the
-   coach evaluation; the current 100% is on 20 questions about one fake resume.
-3. Still open from Phase 1: labelled resume and JD pairs, threshold tuning, Docker build,
-   CI (needs a GitHub remote).
-4. Phase 3: accounts, per-user isolation, quotas, feedback, admin metrics.
+1. Decide whether to use a hosted model for the coach to meet the citation, faithfulness
+   and latency targets; the local qwen2.5:3b misses all three on this laptop.
+2. Restart Windows to finish the WSL 2 install, start Docker Desktop, and run
+   `docker build -t resumefit .`.
+3. Add questions from real, consenting users to `eval/coach_questions.json` and rerun the
+   coach evaluation; the current numbers are on 20 questions about one fake resume.
+4. Still open from Phase 1: labelled resume and JD pairs and threshold tuning.
+5. Phase 3: accounts, per-user isolation, quotas, feedback, admin metrics.

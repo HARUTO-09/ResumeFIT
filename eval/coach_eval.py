@@ -22,6 +22,8 @@ import argparse
 import csv
 import dataclasses
 import json
+import statistics
+import time
 from pathlib import Path
 
 from app.config import get_settings
@@ -103,14 +105,18 @@ def main() -> None:
     questions = json.loads(args.questions.read_text(encoding="utf-8"))["questions"]
 
     rows = []
+    latencies_ms: list[float] = []
     hits = answerable = cited = refusal_correct = failed = 0
     for item in questions:
+        started = time.perf_counter()
         try:
             result = answer_question(item["question"], passages, vectors, embedder, llm, params)
         except LLMUnavailable as exc:
             failed += 1
             print(f"model call failed ({exc}): {item['question']}")
             continue
+        latency_ms = (time.perf_counter() - started) * 1000
+        latencies_ms.append(latency_ms)
         refused = result.status in REFUSED
         expect_refuse = item["expect"] == "refuse"
         refusal_correct += refused == expect_refuse
@@ -134,6 +140,7 @@ def main() -> None:
                 "expect": item["expect"],
                 "status": result.status,
                 "reason": result.reason or "",
+                "latency_ms": round(latency_ms),
                 "gold_retrieved": "" if hit is None else hit,
                 "retrieved_ids": " ".join(p.id for p, _ in result.retrieved),
                 "answer": result.answer,
@@ -152,6 +159,13 @@ def main() -> None:
     )
     print(f"Hit rate at {params.top_k} (answerable questions): {pct(hits, answerable)}")
     print(f"Refusal accuracy (all questions):            {pct(refusal_correct, done)}")
+    if latencies_ms:
+        ordered = sorted(latencies_ms)
+        p95 = ordered[max(0, round(0.95 * (len(ordered) - 1)))]
+        print(
+            f"Answer latency, all questions:               "
+            f"p50 {statistics.median(latencies_ms):.0f} ms, p95 {p95:.0f} ms"
+        )
     if llm is not None:
         print(f"Citation rate (answerable questions):        {pct(cited, answerable)}")
     else:

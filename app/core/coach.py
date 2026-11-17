@@ -16,7 +16,7 @@ from app.core.llm import LLM
 from app.core.params import CoachParams
 from app.core.redaction import redact
 
-COACH_VERSION = "0.2.0"
+COACH_VERSION = "0.3.0"
 SOURCE_PREFIX = {"resume": "R", "jd": "J", "guidance": "G"}
 USER_SOURCES = ("resume", "jd")
 
