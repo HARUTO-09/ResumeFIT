@@ -11,7 +11,7 @@ holds all three phases of the PRD: **Matcher MVP**, **RAG coach** and **SaaS-lit
 
 ## Status
 
-| Item | State (17 Nov 2026, Windows 11, Python 3.14, torch 2.15 CPU) |
+| Item | State (17 Nov 2026, Windows 11, Python 3.14; embeddings through ONNX Runtime since the evening, before that torch 2.15 CPU) |
 | --- | --- |
 | Core matcher: parsing, redaction, skills, scoring, gap report | Built; unit tests pass |
 | API, SQL storage, API tests (`tests/test_api.py`) | Built; tests pass (see coverage row) |
@@ -44,7 +44,6 @@ in the weak band. These are plumbing checks, not a quality measurement.
 cd C:\Users\mukun\Job\Projects\ResumeFIT
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements-dev.txt
 copy .env.example .env
 # then in .env: set the RESUMEFIT_FIREBASE_* values (see "Firebase setup" below) and
@@ -160,6 +159,18 @@ JD ─────► documents.py ─► split_units (requirement sentences) �
 
 `app/core/` has no FastAPI or database imports; `app/routes.py` is a thin layer over
 `app/core/pipeline.py`. The matcher makes no LLM call.
+
+**Embedding runtime.** Since 17 Nov 2026 the model (all-MiniLM-L6-v2) runs through ONNX
+Runtime from the model's official ONNX export, pinned to one revision, instead of
+sentence-transformers and PyTorch, so the API fits a 512 MB free host. It reproduces the
+sentence-transformers output: on 79 texts from the fake test and sample documents and the
+guidance corpus (one past the 256-token limit), cosine 1.000000 between the two vectors
+for every text and a largest element difference of 2e-7. Six resume and JD pairs gave
+identical reports (score, band, skills, suggestions), and the coach draft set retrieved the
+same passages for all 30 questions. One analysis of the sample pair took 96 ms against
+326 ms with PyTorch on this laptop. The API's peak memory through the account flow was
+324 MB (Windows working set). The PyTorch backend is still available
+(`requirements-torch.txt`, `RESUMEFIT_EMBEDDING_BACKEND=sentence-transformers`).
 
 **Score.** `score = 100 × (w1 × S_skill + w2 × S_semantic)`, with `w1 = w2 = 0.5` to start.
 

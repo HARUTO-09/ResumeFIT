@@ -1,0 +1,6 @@
+# Optional: the sentence-transformers (PyTorch) backend, kept to compare against the
+# default ONNX backend (RESUMEFIT_EMBEDDING_BACKEND=sentence-transformers).
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements-torch.txt
+-r requirements.txt
+sentence-transformers>=3.0

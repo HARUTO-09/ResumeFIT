@@ -89,8 +89,12 @@ All three are written. README.md has the architecture, API table and known limit
   503 "high demand". Eval: 20/20 cited, 19/20 faithful (Claude's reading, not the
   owner's), p50 1.5 s, p95 8.2 s. README Privacy and `web/config.js` name Google.
   Answers CSV in scratchpad `coach_answers_gemini.csv`. Ollama is no longer needed.
-- Planned free stack, not deployed: `web/` on Vercel Hobby, API on Hugging Face Spaces
-  (Docker, free CPU), Neon Postgres.
+- Free stack: `web/` on Vercel Hobby, API on Render free (Docker, 512 MB, `render.yaml`,
+  region virginia), Neon Postgres. Hugging Face was dropped: Docker Spaces now need PRO
+  (402 on create, nothing was created). `deploy/hf_space.py` is unused.
+- Embeddings now run through ONNX Runtime (`OnnxEmbedder`, default backend `onnx`, model
+  revision pinned); no torch in requirements. Verified identical to sentence-transformers
+  (cosine 1.000000, 6/6 identical reports, 30/30 same retrieval); API peak 324 MB.
 - Neon: project shy-poetry-66901925, AWS us-east-1, only the Postgres service enabled.
   Connection string is `NEON_DATABASE_URL` in `.env` (not read by the app; local runs stay
   on SQLite). Set it as `RESUMEFIT_DATABASE_URL` in the host's secrets. Verified 17 Nov:

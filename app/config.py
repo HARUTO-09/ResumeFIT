@@ -16,8 +16,9 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///./resumefit.db"
 
-    # "sentence-transformers" (real model) or "hashing" (no download; tests and CI)
-    embedding_backend: str = "sentence-transformers"
+    # "onnx" (the real model through ONNX Runtime), "sentence-transformers" (the same
+    # model through PyTorch, optional install) or "hashing" (no download; tests and CI)
+    embedding_backend: str = "onnx"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     resume_max_mb: int = 5

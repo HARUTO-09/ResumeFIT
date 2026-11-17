@@ -1,0 +1,35 @@
+# Render Blueprint for the API: Docker, free plan, US East (next to the Neon database).
+# Secrets (sync: false) are entered in the Render dashboard or through its API, never here.
+services:
+  - type: web
+    name: resumefit-api
+    runtime: docker
+    plan: free
+    region: virginia
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: RESUMEFIT_DATABASE_URL # Neon connection string
+        sync: false
+      - key: RESUMEFIT_LLM_API_KEY # Gemini API key
+        sync: false
+      - key: RESUMEFIT_LLM_PROVIDER
+        value: openai-compatible
+      - key: RESUMEFIT_LLM_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai
+      - key: RESUMEFIT_LLM_MODEL
+        value: gemini-3.5-flash-lite
+      - key: RESUMEFIT_LLM_TIMEOUT_S
+        value: "20"
+      - key: RESUMEFIT_FIREBASE_PROJECT_ID
+        value: resumefit-2b9f9
+      - key: RESUMEFIT_FIREBASE_API_KEY
+        value: AIzaSyBdvxv_kxvrtdPNJGH10OgtpKbQo7UZgNM
+      - key: RESUMEFIT_FIREBASE_AUTH_DOMAIN
+        value: resumefit-2b9f9.firebaseapp.com
+      - key: RESUMEFIT_CORS_ORIGINS # the web front end's address, set once it is published
+        sync: false
+      - key: RESUMEFIT_ADMIN_EMAILS
+        value: ""

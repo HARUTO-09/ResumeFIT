@@ -13,4 +13,7 @@ python-docx>=1.1
 numpy>=1.26
 scipy>=1.11
 scikit-learn>=1.4
-sentence-transformers>=3.0
+# The embedding model (all-MiniLM-L6-v2) runs through ONNX Runtime, without PyTorch.
+onnxruntime>=1.20
+tokenizers>=0.20
+huggingface_hub>=0.25
