@@ -1,0 +1,19 @@
+# ResumeFit UI theme: light, quiet, one dark accent.
+[theme]
+base = "light"
+primaryColor = "#111827"
+backgroundColor = "#fafaf9"
+secondaryBackgroundColor = "#f3f4f6"
+textColor = "#111827"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+baseRadius = "0.6rem"
+
+[server]
+# The API rejects resumes over 5 MB; say so in the uploader instead of Streamlit's 200 MB.
+maxUploadSize = 5
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
