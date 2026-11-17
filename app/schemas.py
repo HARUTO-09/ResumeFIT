@@ -14,6 +14,8 @@ class HealthOut(_Model):
     status: str
     model_version: str
     embedding_backend: str
+    coach_model_version: str
+    guidance_docs: int
 
 
 class MissingSkill(_Model):
@@ -66,3 +68,27 @@ class JDExtractOut(_Model):
     source: str
     char_count: int
     warning: str | None = None
+
+
+class CoachIn(_Model):
+    analysis_id: str
+    question: str
+
+
+class Citation(_Model):
+    id: str
+    source: str
+    label: str
+    text: str
+
+
+class CoachOut(_Model):
+    id: str
+    analysis_id: str
+    # answered | retrieval_only | not_in_sources | declined
+    status: str
+    answer: str
+    citations: list[Citation]
+    reason: str | None = None
+    model_version: str
+    latency_ms: int

@@ -131,3 +131,30 @@ def add_to_zip(data: bytes, name: str, content: bytes) -> bytes:
 
 
 LEGACY_DOC = bytes.fromhex("D0CF11E0A1B11AE1") + b"\x00" * 512
+
+
+class FakeLLM:
+    """Stands in for a language model. `reply` is a string or a function of (system, user)."""
+
+    name = "fake-llm"
+
+    def __init__(self, reply=None, error: Exception | None = None):
+        self.reply = reply
+        self.error = error
+        self.calls: list[tuple[str, str]] = []
+
+    def complete(self, system: str, user: str) -> str:
+        self.calls.append((system, user))
+        if self.error:
+            raise self.error
+        if callable(self.reply):
+            return self.reply(system, user)
+        return self.reply
+
+
+def cite_first_passage(system: str, user: str) -> str:
+    """A well-behaved model: one claim, citing the first passage it was given."""
+    import re
+
+    first = re.search(r'<passage id="([RJG]\d+)"', user).group(1)
+    return f"Add a line that shows this, with the tool and the result [{first}]."

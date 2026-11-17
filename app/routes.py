@@ -1,4 +1,4 @@
-"""Phase 1 endpoints: /health, /jd/extract, /analyze, /analyses.
+"""Endpoints: /health, /jd/extract, /analyze, /analyses (Phase 1) and /coach (Phase 2).
 
 Handlers are plain `def` functions, so FastAPI runs them in a thread pool and
 the CPU-bound parsing and embedding work does not block the event loop.
@@ -7,14 +7,27 @@ the CPU-bound parsing and embedding work does not block the event loop.
 import time
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.documents import read_jd_file, read_resume, validate_jd_text
+from app.core.coach import COACH_VERSION, answer_question
+from app.core.documents import normalise_text, read_jd_file, read_resume, validate_jd_text
+from app.core.llm import LLMUnavailable
 from app.core.pipeline import analyze_texts, model_version
+from app.core.redaction import redact
+from app.db import delete_analysis_data
 from app.errors import AppError
-from app.models import Analysis
-from app.schemas import AnalysisOut, AnalysisSummary, HealthOut, JDExtractOut
+from app.models import Analysis, CoachMessage, GuidanceDoc, new_analysis_id
+from app.schemas import (
+    AnalysisOut,
+    AnalysisSummary,
+    Citation,
+    CoachIn,
+    CoachOut,
+    HealthOut,
+    JDExtractOut,
+)
+from app.store import add_analysis_chunks, load_passages
 
 router = APIRouter()
 
@@ -61,13 +74,20 @@ def get_analysis_or_404(session: Session, analysis_id: str) -> Analysis:
     return row
 
 
+def coach_model_version(state) -> str:
+    llm_name = state.llm.name if state.llm is not None else "retrieval-only"
+    return f"coach-{COACH_VERSION}+{state.embedder.name}+{llm_name}"
+
+
 @router.get("/health", response_model=HealthOut)
-def health(request: Request):
+def health(request: Request, session: Session = Depends(get_session)):
     state = request.app.state
     return HealthOut(
         status="ok",
         model_version=model_version(state.embedder),
         embedding_backend=state.settings.embedding_backend,
+        coach_model_version=coach_model_version(state),
+        guidance_docs=session.scalar(select(func.count()).select_from(GuidanceDoc)) or 0,
     )
 
 
@@ -131,6 +151,7 @@ def analyze(
     latency_ms = int((time.perf_counter() - started) * 1000)
 
     row = Analysis(
+        id=new_analysis_id(),
         jd_text=jd_clean,
         jd_source=source,
         resume_text=resume_text if store_resume_text else None,
@@ -150,6 +171,9 @@ def analyze(
         latency_ms=latency_ms,
     )
     session.add(row)
+    # Redacted resume passages and JD passages for the coach, saved with the analysis
+    # in one transaction and deleted with it.
+    add_analysis_chunks(session, row.id, resume_text, jd_clean, state.embedder, state.coach)
     session.commit()
 
     request.state.log = {
@@ -191,7 +215,73 @@ def read_analysis(analysis_id: str, session: Session = Depends(get_session)):
 @router.delete("/analyses/{analysis_id}", status_code=204, response_class=Response)
 def delete_analysis(analysis_id: str, session: Session = Depends(get_session)):
     row = get_analysis_or_404(session, analysis_id)
-    # Phase 2: also delete this analysis's vector chunks here, in the same step.
-    session.delete(row)
+    # The analysis, its coach messages and its vector chunks go in one transaction.
+    delete_analysis_data(session, [row.id])
     session.commit()
     return Response(status_code=204)
+
+
+@router.post("/coach", response_model=CoachOut)
+def coach(request: Request, body: CoachIn, session: Session = Depends(get_session)):
+    """Ask a question about one analysis. Answers come only from the sources, with citations."""
+    state = request.app.state
+    params = state.coach
+    started = time.perf_counter()
+
+    row = get_analysis_or_404(session, body.analysis_id)
+    question = normalise_text(body.question)
+    if not params.question_min_chars <= len(question) <= params.question_max_chars:
+        raise AppError(
+            422,
+            "question_length",
+            f"The question must be {params.question_min_chars} to "
+            f"{params.question_max_chars} characters.",
+        )
+
+    passages, vectors = load_passages(session, row.id, state.embedder)
+    try:
+        result = answer_question(question, passages, vectors, state.embedder, state.llm, params)
+    except LLMUnavailable as exc:
+        request.state.log = {"analysis_id": row.id, "llm_problem": str(exc)}
+        raise AppError(
+            503,
+            "llm_unavailable",
+            "The coach's language model cannot be reached right now. "
+            "The matcher still works; please try the coach again later.",
+        ) from None
+
+    version = coach_model_version(state)
+    cited_ids = [p.id for p in result.citations]
+    # Contact details typed into a question are not stored.
+    session.add(CoachMessage(analysis_id=row.id, role="user", content=redact(question).text))
+    reply = CoachMessage(
+        analysis_id=row.id,
+        role="assistant",
+        content=result.answer,
+        cited_passage_ids=cited_ids,
+        status=result.status,
+        model_version=version,
+    )
+    session.add(reply)
+    session.commit()
+
+    request.state.log = {
+        "analysis_id": row.id,
+        "coach_status": result.status,
+        "coach_reason": result.reason,
+        "retrieved": len(result.retrieved),
+        "cited": len(cited_ids),
+        "model_version": version,
+    }
+    return CoachOut(
+        id=reply.id,
+        analysis_id=row.id,
+        status=result.status,
+        answer=result.answer,
+        citations=[
+            Citation(id=p.id, source=p.source, label=p.label, text=p.text) for p in result.citations
+        ],
+        reason=result.reason,
+        model_version=version,
+        latency_ms=int((time.perf_counter() - started) * 1000),
+    )

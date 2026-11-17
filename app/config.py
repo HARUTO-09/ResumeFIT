@@ -8,7 +8,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.params import MB, DocumentLimits, ScoringParams
+from app.core.params import MB, CoachParams, DocumentLimits, ScoringParams
 
 
 class Settings(BaseSettings):
@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     synonym_threshold: float = 0.80
     weak_section_threshold: float = 0.35
 
+    # Coach (Phase 2). "none" = retrieval-only: passages are shown, no text is generated.
+    # "openai-compatible" = any server that offers the chat-completions HTTP format.
+    llm_provider: str = "none"
+    llm_base_url: str = ""
+    llm_model: str = ""
+    llm_api_key: str = ""
+    llm_timeout_s: float = 8.0
+    coach_top_k: int = 5
+    coach_min_similarity: float = 0.25
+
     retention_days: int = 30
     log_level: str = "INFO"
 
@@ -56,6 +66,9 @@ class Settings(BaseSettings):
             synonym_threshold=self.synonym_threshold,
             weak_section_threshold=self.weak_section_threshold,
         )
+
+    def coach(self) -> CoachParams:
+        return CoachParams(top_k=self.coach_top_k, min_similarity=self.coach_min_similarity)
 
 
 @lru_cache(maxsize=1)

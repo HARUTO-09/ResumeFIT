@@ -78,6 +78,42 @@ def show_analysis(a: dict) -> None:
     st.caption(f"Analysis {a['id']} · {a['model_version']} · {a['latency_ms']} ms")
 
 
+def show_coach(analysis_id: str) -> None:
+    st.subheader("Ask the coach")
+    st.caption(
+        "Answers come only from your resume, this job description and the guidance library, "
+        "with the passages they came from. The coach does not predict hiring outcomes."
+    )
+    history = st.session_state.setdefault("coach_history", {}).setdefault(analysis_id, [])
+    for turn in history:
+        st.markdown(f"**You:** {turn['question']}")
+        st.markdown(turn["answer"])
+        if turn["citations"]:
+            with st.expander(f"Sources ({len(turn['citations'])})"):
+                for c in turn["citations"]:
+                    st.markdown(f"**[{c['id']}] {c['label']}** · {c['source']}")
+                    st.write(c["text"])
+    with st.form(f"coach_{analysis_id}", clear_on_submit=True):
+        question = st.text_input(
+            "Your question",
+            max_chars=500,
+            placeholder="How do I show deployment experience for this JD?",
+        )
+        sent = st.form_submit_button("Ask")
+    if sent and question.strip():
+        with st.spinner("Looking through the sources..."):
+            data, error = api(
+                "POST", "/coach", json={"analysis_id": analysis_id, "question": question}
+            )
+        if error:
+            st.error(error)
+        else:
+            history.append(
+                {"question": question, "answer": data["answer"], "citations": data["citations"]}
+            )
+            st.rerun()
+
+
 tab_new, tab_saved = st.tabs(["New analysis", "Saved analyses"])
 
 with tab_new:
@@ -137,6 +173,8 @@ with tab_new:
     if st.session_state.get("last_analysis"):
         st.divider()
         show_analysis(st.session_state["last_analysis"])
+        st.divider()
+        show_coach(st.session_state["last_analysis"]["id"])
 
 with tab_saved:
     rows, error = api("GET", "/analyses")

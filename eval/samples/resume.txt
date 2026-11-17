@@ -1,0 +1,21 @@
+Asha Rao
+asha.rao@example.com | +91 98765 43210 | linkedin.com/in/asharao
+Flat 4, MG Road, Hyderabad 500081
+
+Skills
+Languages: Python, SQL, C++
+Tools: PyTorch, Git, Containerisation, FastAPI
+
+Projects
+Chest X-ray classifier
+- Trained a CNN in PyTorch to classify chest X-ray images, reaching 91% accuracy on the test split.
+- Built a REST API with FastAPI to serve model predictions and stored results in PostgreSQL.
+- Wrote unit tests with pytest and packaged the service in a Docker image.
+
+Experience
+Machine Learning Intern, Example Labs
+- Cleaned and transformed sensor data with pandas and built data pipelines for model training.
+- Monitored model performance weekly and reported drift in input features to the team.
+
+Education
+B.Tech Computer Science, Example Institute of Technology, 2027

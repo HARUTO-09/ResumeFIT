@@ -1,0 +1,12 @@
+AI Engineer
+
+Responsibilities
+- Implement machine learning and AI models as per solution designs and convert analytical models into production-ready components for the business.
+- Integrate models with REST APIs, applications and data pipelines so that predictions reach downstream systems reliably.
+- Deploy models on cloud platforms using Docker and monitor model performance and basic drift indicators.
+- Perform data preprocessing and transformation, and carry out functional testing of AI components.
+
+Requirements
+- Strong Python and SQL skills, with hands-on experience in PyTorch or scikit-learn.
+- Working knowledge of Docker, Git and SQL databases.
+- Good communication skills and the ability to maintain clear documentation.

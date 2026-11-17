@@ -2,11 +2,11 @@
 
 from datetime import timedelta
 
-from sqlalchemy import create_engine, delete
+from sqlalchemy import create_engine, delete, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import Analysis, Base, utcnow
+from app.models import Analysis, Base, Chunk, CoachMessage, utcnow
 
 
 def make_engine(database_url: str) -> Engine:
@@ -21,9 +21,22 @@ def init_db(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, expire_on_commit=False)
 
 
+def delete_analysis_data(session: Session, analysis_ids: list[str]) -> None:
+    """Delete analyses with their coach messages and vector chunks.
+
+    Does not commit: the caller commits, so everything goes in one transaction.
+    """
+    if not analysis_ids:
+        return
+    session.execute(delete(Chunk).where(Chunk.analysis_id.in_(analysis_ids)))
+    session.execute(delete(CoachMessage).where(CoachMessage.analysis_id.in_(analysis_ids)))
+    session.execute(delete(Analysis).where(Analysis.id.in_(analysis_ids)))
+
+
 def purge_expired(session: Session, retention_days: int) -> int:
-    """Delete analyses older than the retention period. Returns rows removed."""
+    """Delete analyses older than the retention period. Returns analyses removed."""
     cutoff = utcnow() - timedelta(days=retention_days)
-    result = session.execute(delete(Analysis).where(Analysis.created_at < cutoff))
+    expired = list(session.scalars(select(Analysis.id).where(Analysis.created_at < cutoff)))
+    delete_analysis_data(session, expired)
     session.commit()
-    return result.rowcount or 0
+    return len(expired)

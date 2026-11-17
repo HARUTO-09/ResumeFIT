@@ -41,3 +41,16 @@ class ScoringParams:
     def __post_init__(self) -> None:
         if abs(self.w_skill + self.w_semantic - 1.0) > 1e-6:
             raise ValueError("w_skill + w_semantic must equal 1")
+
+
+@dataclass(frozen=True)
+class CoachParams:
+    top_k: int = 5
+    # Passages less similar to the question than this are not used. Untuned;
+    # the right value depends on the embedding model.
+    min_similarity: float = 0.25
+    # About 200 to 300 tokens per chunk, with a small overlap.
+    chunk_words: int = 180
+    chunk_overlap_words: int = 30
+    question_min_chars: int = 5
+    question_max_chars: int = 500

@@ -15,16 +15,25 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app import __version__
 from app.config import Settings, get_settings
 from app.core.embeddings import Embedder, EmbeddingCache, build_embedder
+from app.core.guidance import load_guidance
+from app.core.llm import LLM, build_llm
 from app.core.skills import load_skills
 from app.db import init_db, make_engine, purge_expired
 from app.errors import AppError
 from app.logging_utils import log_event, setup_logging
 from app.routes import router
+from app.store import sync_guidance
 
 _HTTP_CODES = {404: "not_found", 405: "method_not_allowed"}
+_FROM_SETTINGS = object()
 
 
-def create_app(settings: Settings | None = None, embedder: Embedder | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    embedder: Embedder | None = None,
+    llm: LLM | None | object = _FROM_SETTINGS,
+) -> FastAPI:
+    """Build the app. Tests pass an embedder and an llm (None means retrieval-only)."""
     settings = settings or get_settings()
     setup_logging(settings.log_level)
 
@@ -42,9 +51,27 @@ def create_app(settings: Settings | None = None, embedder: Embedder | None = Non
             settings.embedding_backend, settings.embedding_model
         )
         state.jd_cache = EmbeddingCache()
+        state.coach = settings.coach()
+        if llm is _FROM_SETTINGS:
+            state.llm = build_llm(
+                settings.llm_provider,
+                settings.llm_base_url,
+                settings.llm_model,
+                settings.llm_api_key,
+                settings.llm_timeout_s,
+            )
+        else:
+            state.llm = llm
         with state.session_factory() as session:
             removed = purge_expired(session, settings.retention_days)
-        log_event("startup", embedder=state.embedder.name, expired_removed=removed)
+            reingested = sync_guidance(session, load_guidance(), state.embedder, state.coach)
+        log_event(
+            "startup",
+            embedder=state.embedder.name,
+            llm=state.llm.name if state.llm is not None else "retrieval-only",
+            expired_removed=removed,
+            guidance_reingested=reingested,
+        )
         yield
         engine.dispose()
 
