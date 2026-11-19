@@ -1,44 +1,88 @@
 # ResumeFit
 
-Scores a resume against a job description (JD), shows which skills match and which are
-missing, and suggests what to change in each weak section. A coach then answers follow-up
-questions using only the resume, the JD and a guidance library, with citations. Students
-sign in, see only their own work, have daily limits, can rate results and delete their
-account; an admin page tracks quality, latency, usage and score drift. This repository
-holds all three phases of the PRD: **Matcher MVP**, **RAG coach** and **SaaS-lite**.
+**Score a resume against a job description, see exactly which skills are missing, and ask
+a coach what to change, with every answer citing its source.**
+
+**Live:** [resumefit-web.vercel.app](https://resumefit-web.vercel.app) · API docs:
+[resumefit-api-x93n.onrender.com/docs](https://resumefit-api-x93n.onrender.com/docs)
+
+ResumeFit is a full-stack app: a FastAPI backend with an embedding-based matcher, a
+retrieval-augmented (RAG) coach with a groundedness guardrail, Firebase sign-in, per-user
+data isolation, daily quotas, ratings, an admin metrics page with score-drift detection,
+and a plain HTML/CSS/JavaScript front end. It runs entirely on free tiers: Vercel, Render,
+Neon PostgreSQL, Firebase Authentication and the Gemini API.
 
 > The score is a guide to improving a resume, not a hiring decision, and it can be wrong.
 
-## Status
+## Results at a glance
 
-| Item | State (17 Nov 2026, Windows 11, Python 3.14; embeddings through ONNX Runtime since the evening, before that torch 2.15 CPU) |
+Every number below was measured on this project; the conditions are in the right-hand
+column and in [Evaluation](#evaluation). Test data is fake (`tests/helpers.py`,
+`eval/samples/`).
+
+| What | Result | Conditions |
+| --- | --- | --- |
+| Automated tests | **229 tests, 96% line coverage** of `app/` | `pytest --cov=app`, 19 Nov 2026; CI gate is 80% |
+| End-to-end checks on the live deployment | **21/21** browser checks and **21/21** API checks passed | Playwright (headless Edge) against the live site, and a scripted API flow against the live API, with throwaway test accounts deleted afterwards, 17 Nov 2026 |
+| `/analyze` latency, 2-page resume | **p50 488 ms, p95 642 ms** one request at a time (20 requests); **p50 1113 ms, p95 1549 ms** at concurrency 4 (30 requests); **0 failures in 52 analyses** | `eval/load_test.py` on a laptop (Intel i7-1355U), client and server on the same machine, ONNX backend, 19 Nov 2026 |
+| Embedding runtime switch (PyTorch to ONNX Runtime) | **3.4× faster** per analysis (96 ms vs 326 ms), **identical outputs**, API peak memory **324 MB** | Same model, both runtimes, same laptop; memory is the Windows working set through the full account flow, under the 512 MB free host. Cosine 1.000000 between the two runtimes' vectors on 79 texts; 6/6 resume and JD pairs gave identical reports; the coach retrieved the same passages for 30/30 questions |
+| Coach retrieval hit rate at 5 | **100% (20/20)**, up from **55% (11/20)** | 30-question draft set (20 answerable), after moving resume and JD passages from about 180 to about 25 words and reserving a slot for each |
+| Coach refusals | **100% (30/30)** correct | Same set: answerable questions answered; out-of-scope and adversarial questions declined |
+| Coach answers that cite a retrieved source | **20/20** with Gemini, up from **17/20** with a local 3B model | Same set, coach 0.3.0 |
+| Coach p95 latency | **8.2 s** (8.4 s on a second run), down from **39.8 s** | `gemini-3.5-flash-lite` (hosted, free tier) vs qwen2.5:3b on the laptop CPU |
+| Skills knowledge base | **103 skills, 239 aliases, 28 implication rules** | `app/data/skills.json` (for example, PostgreSQL implies SQL) |
+| Coach guide library | **24 documents** | `app/data/guidance/` |
+| Hosting cost | **$0 a month** | Free plans of Vercel, Render, Neon, Firebase and the Gemini API |
+
+Not measured yet: agreement with human-labelled match bands, and the gain over a keyword
+baseline. Both need labelled resume and job pairs (see [Next steps](#next-steps)).
+
+## Features
+
+- **Matcher.** Upload a resume PDF and paste a job description, or upload it as PDF or
+  Word. You get a 0–100 score and a band (strong, partial, weak), the matched and missing
+  skills ranked by how often the job asks for them, a "start here" gap, and suggestions
+  for weak resume sections. The report downloads as Markdown.
+- **Coach.** Ask follow-up questions about an analysis. Answers come only from your
+  resume, the job description and a 24-document guide library, with citations such as
+  `[R3]` or `[J10]`. An answer that cites anything it did not retrieve is never shown.
+- **Accounts.** Google or email sign-in through Firebase, a consent step that shows what
+  is stored, a history with a score trend, and full account deletion.
+- **SaaS basics.** Per-user isolation, daily quotas, 1–5 ratings on analyses and coach
+  answers, and an admin page with latency percentiles, error rates, quota hits, usage,
+  the score distribution, rating trends and drift flags.
+- **Privacy by design.** Uploads are parsed in memory and never saved. Names and contact
+  details are removed before anything is stored or sent to the language model. Logs
+  carry no resume or job text, and tests check this.
+
+## Architecture
+
+```
+ Browser ──► Vercel (static site: web/, plain HTML/CSS/JS)
+    │
+    ├──► Firebase Authentication (Google or email sign-in, ID tokens)
+    │
+    └──► Render (Docker, FastAPI) ── verifies Firebase tokens (PyJWT, RS256)
+              │
+              ├── matcher: parsing ─► redaction ─► skills ─► embeddings (ONNX) ─► score
+              ├── coach:   retrieval ─► Gemini API ─► groundedness check
+              └── Neon PostgreSQL: users, analyses, passages + vectors, ratings, metrics
+```
+
+| Layer | Technology |
 | --- | --- |
-| Core matcher: parsing, redaction, skills, scoring, gap report | Built; unit tests pass |
-| API, SQL storage, API tests (`tests/test_api.py`) | Built; tests pass (see coverage row) |
-| Lint (`ruff check`, `ruff format`) | Clean |
-| API with the real model (all-MiniLM-L6-v2) | Smoke-tested by hand: every endpoint and the error paths behave as in the table below |
-| Streamlit UI | Loads against the running API and lists saved analyses; the upload flow was not exercised in a browser |
-| GitHub Actions workflow | Green on the first push to `github.com/HARUTO-09/ResumeFIT` (17 Nov 2026): lint, tests with coverage gate, Docker build on the runner |
-| Dockerfile, local Docker build | **Not yet run locally.** Docker Desktop was installed on 17 Nov 2026, but its engine needs Windows' Virtual Machine Platform and WSL 2, which need a restart; the CI runner built the image |
-| Score quality with the real embedding model | **Not measured.** Needs your labelled pairs |
-| Phase 2 coach core: chunking, retrieval, guardrails, LLM client | Built; unit tests pass |
-| Phase 2 storage and API: `chunks`, `coach_messages`, `POST /coach`, `tests/test_api_coach.py` | Built; tests pass (see the Phase 3 API row for the current count) |
-| Coach with the real embedding model, retrieval-only | Smoke-tested by hand: `/health` reports 24 guidance documents; `/coach` returns cited passages, declines a hiring question, and answers "not in the sources" for an off-topic one. `eval/coach_eval.py` was run; see the results table |
-| Load test (`eval/load_test.py`, 2-page fake resume, laptop CPU) | Run on 17 Nov 2026; see the results table |
-| Coach with a real language model | Since 17 Nov 2026, Google's `gemini-3.5-flash-lite` (Gemini API free tier); before that, local qwen2.5:3b through Ollama. Gemini was evaluated on the draft set and answered through `/coach` in the web front end's browser flow (see "Choosing the coach model") |
-| Coach chat in the Streamlit UI | Driven headlessly against the running API: a question is sent, the answer and a "Sources (5)" expander render |
-| Phase 3 core: Firebase token verification, the UI's Firebase REST client, monitoring and drift functions (17 Nov 2026) | Built; unit tests pass, against a local fake of Firebase's keys and endpoints |
-| Phase 3 API: Firebase sign-in, per-user isolation, quotas, feedback, admin metrics, request metrics; `tests/test_api_accounts.py`, `test_api_isolation.py`, `test_api_quotas.py`, `test_api_feedback_admin.py`; existing API tests now sign in | Built; 222 tests pass in all on this machine (with `tests/test_cors.py`), 97% line coverage of `app/` |
-| Phase 3 API against the real Firebase project `resumefit-2b9f9` | Run on 17 Nov 2026 with two throwaway email/password test accounts (created through Firebase's REST API, then deleted): register refused without consent (422) and accepted with it; analysis and coach answer; rating and re-rating an analysis, rating a coach answer; the second account sees no analyses and gets 404 when reading, coaching on, rating or deleting the first account's analysis, and 403 on admin metrics; both accounts deleted (204), after which the token gets 403. All 21 checks passed |
-| Phase 3 Streamlit UI: Google and email sign-in through Firebase, consent step, ratings, account deletion, admin tab | Redesigned on 17 Nov 2026 as a minimal single-column layout (theme in `.streamlit/config.toml`): a two-step analyse flow that remembers the last resume for the visit, a score ring with a one-line verdict and a "start here" gap, a Markdown report download, suggested coach questions and citation badges, and a score trend and delete confirmation in History. Driven headlessly with Streamlit's AppTest against the live API and a throwaway Firebase test account: sign-in, create-account and consent screens, the three tabs, an analysis, history, a live coach answer and the delete toggle render without errors. Screenshots were checked in Edge at desktop and phone widths. **Not yet clicked through by a person**; Google sign-in is enabled in the console but untried, because it needs a real Google account. The Admin tab was not rendered (no admin email set) |
-| Website deployed on Vercel (Hobby, static, root directory `web`), `https://resumefit-web.vercel.app` | Deployed 17 Nov 2026 from `main`. `RESUMEFIT_CORS_ORIGINS` on Render and Firebase's Authorized domains both list the site. The 21-check browser flow (headless Edge with Playwright) passed against the live site and API with a throwaway email/password test account that the flow deletes; Neon held no user rows afterwards. The owner then used the live site and reported on 17 Nov 2026 that everything works |
-| API deployed on Render (free plan, Docker, Virginia), `https://resumefit-api-x93n.onrender.com` | Deployed 17 Nov 2026 from `main` (auto-deploy on push), with Neon as the database and Gemini as the coach model; secrets are set in Render, not in the repo. First build and start took about 3 minutes. The 21-check account flow passed against the live URL with two throwaway test accounts, deleted afterwards. The free plan sleeps after about 15 idle minutes, and the first request after that is slow |
-| PostgreSQL on Neon (free tier, AWS us-east-1, PostgreSQL 18.7) through `psycopg` 3 | Run on 17 Nov 2026: the API started against an empty Neon database and created all 9 tables and the 24 guidance passages; the 21-check account flow above then passed against it (8.5 s for a coach answer from this laptop in India), and after both test accounts were deleted Neon held no user rows. Local runs and the test suite stay on SQLite. This laptop's Wi-Fi router DNS refuses Neon hostnames, so the check pinned the address with libpq's `hostaddr`; a host with normal DNS needs nothing extra |
-| Web front end (`web/`, plain HTML, CSS and JavaScript) and CORS for it | Built 17 Nov 2026; `tests/test_cors.py` passes. Driven in headless Edge with Playwright against the live API and the real Firebase project, with a throwaway email/password test account that the flow deletes at the end: sign-up refused without consent, then accepted; analyse button disabled until a resume and a 200+ character JD are given; analysis, report download, analysis rating, a live coach answer from a suggested question, history open and delete confirmation, account usage, no horizontal scroll at phone width, account deletion with password re-entry, and the deleted account can no longer sign in. All 21 checks passed. Google sign-in and the Admin page were not exercised |
+| API | Python, FastAPI, Pydantic, SQLAlchemy 2, Uvicorn |
+| Matching | all-MiniLM-L6-v2 embeddings through ONNX Runtime, a curated skills graph, scikit-learn, SciPy |
+| Documents | pdfplumber, pypdf, python-docx, with checks on file type, size, page count and zip bombs |
+| Coach | Retrieval over SQL-stored vectors, Gemini API through an OpenAI-compatible client, rule-based guardrails |
+| Auth | Firebase Authentication, PyJWT token verification against Google's public keys |
+| Data | PostgreSQL on Neon (psycopg 3) in production, SQLite locally and in tests |
+| Front end | Plain HTML, CSS and JavaScript (no framework, no build step), Firebase JS SDK |
+| Quality | pytest (229 tests), ruff, pre-commit, GitHub Actions (lint, tests, Docker build) |
+| Hosting | Vercel (site), Render (API, Docker), Neon (database), all free plans |
 
-Observed on the fake test resume and JD from `tests/helpers.py`, with the real model: the
-same JD sent as pasted text, PDF and DOCX gave the same score, and the weak resume scored
-in the weak band. These are plumbing checks, not a quality measurement.
+`app/core/` holds the matching, coach and security logic with no FastAPI or database
+imports; `app/routes.py`, `app/auth.py` and `app/admin.py` are thin layers over it.
 
 ## Quick start (Windows PowerShell)
 
@@ -48,405 +92,296 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements-dev.txt
 copy .env.example .env
-# then in .env: set the RESUMEFIT_FIREBASE_* values (see "Firebase setup" below) and
-# put your own email in RESUMEFIT_ADMIN_EMAILS to see the Admin tab
+# then in .env: set the RESUMEFIT_FIREBASE_* values (see "Firebase setup") and, for the
+# coach, RESUMEFIT_LLM_* (see "The coach")
 
-pytest --cov=app --cov-report=term-missing     # tests use the hashing embedder, no download
-ruff check --fix . ; ruff format .              # lint and format once
+pytest --cov=app --cov-report=term-missing     # hashing embedder, no download
+ruff check . ; ruff format --check .
 
 uvicorn app.main:app --reload                   # API on http://127.0.0.1:8000, docs at /docs
 python -m http.server 5500 --directory web      # web front end: open http://localhost:5500
-streamlit run ui/streamlit_app.py               # or the older Streamlit UI, from the repo root
-                                                # (so it picks up .streamlit/config.toml)
 ```
 
-The web front end in `web/` is plain HTML, CSS and JavaScript with no build step: a
-landing page, sign-in and sign-up (Firebase's JavaScript SDK, so Google sign-in is a
-normal popup), the analyse flow, the coach, history, account, admin, privacy and terms
-pages. It reads the Firebase settings from the API's `/auth/config`. Open it at
-`localhost`, not `127.0.0.1`: Firebase allows `localhost` by default. The API only
-accepts browser calls from origins in `RESUMEFIT_CORS_ORIGINS`. Before publishing it
-(for example on Vercel, as a static site with `web/` as the root), set `API_URL` in
-`web/config.js` to the deployed API, add the site's domain to `RESUMEFIT_CORS_ORIGINS`
-and to Firebase's Authorized domains, and set `COACH_PROVIDER` if the coach uses a
-hosted model.
+Open the site at `localhost`, not `127.0.0.1`: Firebase allows `localhost` by default.
+The first API start downloads the embedding model's ONNX files (pinned revision). To run
+without the download, set `RESUMEFIT_EMBEDDING_BACKEND=hashing`; scores from that backend
+are for plumbing checks only.
 
-Open the UI, create an account (the sign-up form shows the privacy note and asks for
-consent), and use it as before. The first API start downloads the embedding model (about 90 MB). To try the API without
-the download, set `RESUMEFIT_EMBEDDING_BACKEND=hashing` in `.env`; scores from that
-backend are for plumbing checks only.
+The older Streamlit UI still works: `streamlit run ui/streamlit_app.py` from the repo root.
 
-PostgreSQL (for example Neon): set `RESUMEFIT_DATABASE_URL` to the connection string the
-host gives you, `postgresql://...?sslmode=require` as is. The API switches it to the
-psycopg 3 driver, checks pooled connections before use (Neon's free compute sleeps when
-idle) and turns off server-side prepared statements, so Neon's `-pooler` endpoint works.
-Tables are created at startup.
-
-Docker:
+Docker (the image CI builds and Render runs):
 
 ```powershell
 docker build -t resumefit .
 docker run -p 8000:8000 -v resumefit-data:/data --env-file .env resumefit
 ```
 
+## Deployment
+
+| Part | Where | Notes |
+| --- | --- | --- |
+| Website | Vercel, root directory `web` | Static, deploys from `main`. `web/config.js` holds the API URL and the coach provider's name for the privacy text |
+| API | Render, free plan, Docker, Virginia | Deploys from `main` (see `render.yaml`). Secrets (database URL, Gemini key) are set in Render, never in the repository |
+| Database | Neon PostgreSQL 18, AWS us-east-1 | Same region as the API. Tables are created at startup |
+| Sign-in | Firebase project `resumefit-2b9f9` | The site's domain is in Authorized domains |
+
+To publish your own copy: set `RESUMEFIT_DATABASE_URL` to the Postgres connection string
+as the host gives it (`postgresql://...?sslmode=require`). The API switches to the psycopg
+3 driver, checks pooled connections before use (Neon's free compute sleeps when idle) and
+turns off server-side prepared statements so Neon's `-pooler` endpoint works. Set
+`RESUMEFIT_CORS_ORIGINS` to the site's address and add that domain in Firebase.
+
+Free-plan behaviour: the Render API sleeps after about 15 idle minutes, and the first
+request after that is slow; the site shows "Waking up the server…" meanwhile. Hugging Face
+Spaces was tried first but now needs a paid plan for Docker; `deploy/hf_space.py` is kept
+for reference.
+
 ## Firebase setup
 
-Sign-in is Firebase Authentication, project `resumefit-2b9f9`. Firebase handles
-passwords and Google accounts; the API only verifies the Firebase ID token sent with
-each request, using Google's public keys (no service account or Firebase Admin SDK).
-
-1. In the [Firebase console](https://console.firebase.google.com/), open the project,
-   then **Authentication > Sign-in method**, and enable **Email/Password** and **Google**.
-2. Under **Authentication > Settings > Authorized domains**, `localhost` is there by
-   default. Add the domain of any deployed UI before using it there.
+1. In the [Firebase console](https://console.firebase.google.com/), open the project, then
+   **Authentication > Sign-in method**, and enable **Email/Password** and **Google**.
+2. Under **Authentication > Settings > Authorized domains**, add each domain that serves
+   the site (`localhost` is there by default).
 3. In `.env`, set `RESUMEFIT_FIREBASE_PROJECT_ID`, `RESUMEFIT_FIREBASE_API_KEY` and
    `RESUMEFIT_FIREBASE_AUTH_DOMAIN` from the project's web app config. These are public
-   identifiers, not secrets, but they stay in `.env` rather than in the repository.
-4. Restart the API and the UI. The UI reads the settings from `GET /auth/config`.
+   identifiers, not secrets. The site reads them from `GET /auth/config`.
 
-Google sign-in opens Google's window from a small Streamlit component
-(`ui/firebase_google/`) that loads Firebase's JavaScript SDK from Google's CDN; allow
-pop-ups for the UI's address. Email sign-in, password reset and verification emails go
-through Firebase's REST API (`ui/firebase_client.py`).
+The API only verifies the Firebase ID token sent with each request, using Google's public
+keys: no service account or Firebase Admin SDK.
 
 ## API
 
-Every endpoint except `/health` and `/auth/config` needs a header
-`Authorization: Bearer <Firebase ID token>`; without one it returns 401. A valid
-Firebase user who has not yet agreed to the privacy note gets 403
-`registration_required` until they call `POST /auth/register`.
+Every endpoint except `/health` and `/auth/config` needs `Authorization: Bearer <Firebase
+ID token>`; without one it returns 401. A Firebase user who has not yet agreed to the
+privacy note gets 403 `registration_required` until they call `POST /auth/register`.
 
 | Method and path | Purpose | Main responses |
 | --- | --- | --- |
-| `GET /health` | Liveness and model version | 200 |
-| `GET /auth/config` | Public Firebase web settings for the UI | 200 |
-| `POST /auth/register` | JSON `{"consent": true}`; creates the ResumeFit account for this Firebase user | 201 (new), 200 (exists), 401, 422 |
+| `GET /health` | Liveness and model versions | 200 |
+| `GET /auth/config` | Public Firebase web settings for the site | 200 |
+| `POST /auth/register` | JSON `{"consent": true}`; creates the ResumeFit account | 201 (new), 200 (exists), 401, 422 |
 | `GET /auth/me` | The signed-in user, verified-email and admin flags, today's quota use | 200, 401, 403 |
-| `DELETE /auth/me` | Deletes the account and all its data; needs a sign-in less than 5 minutes old | 204, 401 |
-| `POST /jd/extract` | Read a JD file (PDF or DOCX), return its text for preview; stores nothing | 200, 413, 415, 422 |
+| `DELETE /auth/me` | Deletes the account and all its data; needs a sign-in under 5 minutes old | 204, 401 |
+| `POST /jd/extract` | Read a JD file (PDF or DOCX) and return its text; stores nothing | 200, 413, 415, 422 |
 | `POST /analyze` | Multipart: `resume` (PDF) plus exactly one of `jd_text` or `jd_file`; optional `store_resume_text`, `jd_source` | 201, 413, 415, 422, 429 |
-| `GET /analyses` | List your analyses, newest first | 200 |
-| `GET /analyses/{id}` | Read one of your analyses | 200, 404 |
-| `DELETE /analyses/{id}` | Delete one of your analyses, its coach messages and its stored passages | 204, 404 |
-| `POST /coach` | JSON `{"analysis_id", "question"}`; returns `answer`, `citations` and a `status` | 200, 404, 422, 429, 503 |
+| `GET /analyses` | Your analyses, newest first | 200 |
+| `GET /analyses/{id}` | One of your analyses | 200, 404 |
+| `DELETE /analyses/{id}` | Delete an analysis with its coach messages and stored passages | 204, 404 |
+| `POST /coach` | JSON `{"analysis_id", "question"}`; returns `answer`, `citations` and `status` | 200, 404, 422, 429, 503 |
 | `POST /feedback` | JSON `{"target_type": "analysis" or "coach_message", "target_id", "rating": 1-5, "comment"?}` | 201 (new), 200 (updated), 404, 422 |
 | `GET /admin/metrics?days=7` | Quality, latency, usage and drift for the last N days; admins only | 200, 401, 403 |
 
 Another user's analysis or coach answer is reported as 404, not 403, so its existence is
-not revealed. A 429 carries `limit`, `used` and `reset_at` in the error body and a
-`Retry-After` header.
-
+not revealed. A 429 carries `limit`, `used` and `reset_at` and a `Retry-After` header.
 Every error has one shape: `{"error": {"code": "...", "message": "..."}}`.
 
 ```powershell
 # sign in to Firebase with email and password, then call the API with the ID token
-$key = (Invoke-RestMethod http://127.0.0.1:8000/auth/config).api_key
+$api = "http://127.0.0.1:8000"
+$key = (Invoke-RestMethod "$api/auth/config").api_key
 $fb = Invoke-RestMethod -Method Post `
   "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$key" `
   -ContentType "application/json" `
   -Body '{"email": "you@example.com", "password": "your password", "returnSecureToken": true}'
-curl.exe -X POST http://127.0.0.1:8000/analyze -H "Authorization: Bearer $($fb.idToken)" `
+curl.exe -X POST "$api/analyze" -H "Authorization: Bearer $($fb.idToken)" `
   -F "resume=@resume.pdf" -F "jd_file=@jd.docx"
 ```
 
-## How it works
+## How the matcher works
 
 ```
 upload ─► documents.py ─► sections.py ─► redaction.py ─► skills.py ─┐
           type/size/page   skills,        drop header,    curated    ├─► scoring.py ─► gap report ─► SQL
           checks, text     projects, ...  redact contact  list +     │   0-100, band
 JD ─────► documents.py ─► split_units (requirement sentences) ──────┘
-                                         embeddings.py (MiniLM, CPU)
+                                         embeddings.py (MiniLM, ONNX Runtime)
 ```
-
-`app/core/` has no FastAPI or database imports; `app/routes.py` is a thin layer over
-`app/core/pipeline.py`. The matcher makes no LLM call.
-
-**Embedding runtime.** Since 17 Nov 2026 the model (all-MiniLM-L6-v2) runs through ONNX
-Runtime from the model's official ONNX export, pinned to one revision, instead of
-sentence-transformers and PyTorch, so the API fits a 512 MB free host. It reproduces the
-sentence-transformers output: on 79 texts from the fake test and sample documents and the
-guidance corpus (one past the 256-token limit), cosine 1.000000 between the two vectors
-for every text and a largest element difference of 2e-7. Six resume and JD pairs gave
-identical reports (score, band, skills, suggestions), and the coach draft set retrieved the
-same passages for all 30 questions. One analysis of the sample pair took 96 ms against
-326 ms with PyTorch on this laptop. The API's peak memory through the account flow was
-324 MB (Windows working set). The PyTorch backend is still available
-(`requirements-torch.txt`, `RESUMEFIT_EMBEDDING_BACKEND=sentence-transformers`).
 
 **Score.** `score = 100 × (w1 × S_skill + w2 × S_semantic)`, with `w1 = w2 = 0.5` to start.
 
-- `S_skill`: share of JD skills found on the resume, each weighted by how often the JD
-  mentions it. Skills come from `app/data/skills.json` (aliases such as "ML" and
-  "machine learning" count as one). A specific skill implies a general one (PostgreSQL
-  implies SQL). A phrase in the resume's skills section that the list misses can still
-  match by embedding similarity; these are reported separately as `semantic_matches`.
-- `S_semantic`: the JD is cleaned and split into requirement sentences; each takes its
-  best cosine similarity to any resume chunk; the mean is the score.
+- `S_skill`: share of the JD's skills found on the resume, each weighted by how often the
+  JD mentions it. Skills come from `app/data/skills.json`; aliases such as "ML" and
+  "machine learning" count as one, and a specific skill implies a general one. A phrase in
+  the resume's skills section that the list misses can still match by embedding
+  similarity; these are reported separately as `semantic_matches`.
+- `S_semantic`: the JD is split into requirement sentences; each takes its best cosine
+  similarity to any resume chunk, and the mean is the score.
 - `projects_similarity` and `experience_similarity` repeat this per section and drive the
   suggestions. Bands: strong ≥ 70, partial ≥ 45, otherwise weak.
 
-All weights and thresholds are untuned starting values in `.env`. Raw cosine similarity
-from MiniLM is usually well below 1 even for a good match, so expect to move the band
-thresholds once you have labelled pairs.
+All weights and thresholds are untuned starting values in `.env`. They are to be tuned on
+labelled pairs, not by feel.
 
-## The coach (Phase 2)
+**Embedding runtime.** The model (all-MiniLM-L6-v2) runs through ONNX Runtime from the
+model's official ONNX export, pinned to one revision, with the same tokenizer, 256-token
+limit, mean pooling and normalisation as sentence-transformers. This removed PyTorch from
+the server so it fits a 512 MB free host. Checked against sentence-transformers on 79
+texts (one past the token limit): cosine 1.000000 for every text, largest element
+difference 2e-7, identical reports for 6 resume and JD pairs, and the same coach
+retrieval for all 30 questions. The PyTorch backend is still available
+(`requirements-torch.txt`, `RESUMEFIT_EMBEDDING_BACKEND=sentence-transformers`).
+
+## The coach
 
 ```
 question ─► scope check ─► retrieve top 5 ─► language model ─► groundedness check ─► answer + citations
-            (guardrails)   (resume, JD,      (only if one is   (every cited id must
-                            guidance)         configured)       have been retrieved)
+            (guardrails)   (resume, JD,      (Gemini API)      (every cited id must
+                            guidance)                           have been retrieved)
 ```
 
 - **Sources.** Three only: the resume (redacted passages), the JD, and 24 short guidance
-  documents in `app/data/guidance/`, each with a title, source and version recorded in the
-  `guidance_docs` table. The guidance text was drafted with an AI assistant for this
-  project; read it, correct it and make it yours before you rely on it.
-- **Storage.** Passages and their embeddings are rows in the SQL `chunks` table and search
-  is an exact dot product. This replaces the FAISS or Chroma option in the PRD: at this
-  size no index is needed, and deleting an analysis with its passages is one transaction.
-  `app/store.py` is the only place to change if you add a vector library later.
-- **Passage sizes and retrieval.** Guidance documents are chunked at about 180 words. The
-  resume and the JD are chunked at about 25 words, roughly one bullet or sentence each, so
-  a question about one fact matches that line rather than a whole section. Retrieval takes
-  the top 5 overall, then keeps a place for the best resume passage and the best JD passage
-  if they clear the floor, so the longer guidance passages cannot crowd the student's own
-  documents out (`CoachParams` in `app/core/params.py`). Both choices came from the draft
-  eval set, which is small and fake; recheck them on real data.
-- **Answer status.** `answered` (generated text, every claim cited), `retrieval_only`
-  (passages shown with no generated text: either no model is configured, or the model's
-  answer failed the groundedness check and was discarded), `not_in_sources`, `declined`.
-- **Guardrails.** Rules decline hiring predictions and obvious attempts to override the
-  instructions before any model call. Off-topic questions rely on retrieval finding
-  nothing above `RESUMEFIT_COACH_MIN_SIMILARITY`, which is untuned. Text from uploads is
-  passed to the model as delimited data and the model has no tools.
-- **Language model.** Set by configuration (`RESUMEFIT_LLM_*` in `.env`). The default is
-  `none`, which runs the coach in retrieval-only mode. `openai-compatible` works with any
-  hosted or local server that offers the chat-completions HTTP format. Calls time out
-  after 8 s with at most 2 retries; if the model is down `/coach` returns 503 and the
-  matcher keeps working.
-- **Not built** (the PRD marks these as cuttable): reranker, conversation memory, and the
-  dense versus hybrid (BM25) retrieval experiment. Each question is answered on its own.
+  documents in `app/data/guidance/`, each with a title, source and version. The guidance
+  text was drafted with an AI assistant for this project and should be reviewed before
+  anyone relies on it.
+- **Storage and search.** Passages and their embeddings are rows in the SQL `chunks`
+  table, and search is an exact dot product. At this size no vector index is needed, and
+  deleting an analysis with its passages is one transaction. `app/store.py` is the only
+  place to change for a vector library later.
+- **Retrieval.** Guidance is chunked at about 180 words; the resume and JD at about 25
+  words, roughly one bullet or sentence, so a question about one fact matches that line.
+  Retrieval takes the top 5, then reserves a place for the best resume and the best JD
+  passage if they clear the similarity floor, so long guidance passages cannot crowd the
+  student's own documents out. This took the hit rate from 55% to 100% on the draft set.
+- **Guardrails.** Rules decline hiring predictions and attempts to override the
+  instructions before any model call. Uploaded text reaches the model as delimited data,
+  and the model has no tools. An answer is rejected, and only the passages are shown,
+  if it cites an id that was not retrieved (including invented ones like `[Q1]`) or says
+  "not in the sources" while citing a passage.
+- **Answer status.** `answered`, `retrieval_only` (passages only: no model configured, or
+  the answer failed the groundedness check), `not_in_sources`, `declined`.
+- **Language model.** Set by configuration (`RESUMEFIT_LLM_*`). Production uses Google's
+  `gemini-3.5-flash-lite` through the OpenAI-compatible endpoint
+  (`https://generativelanguage.googleapis.com/v1beta/openai`) with a 20 s timeout and up
+  to 2 retries. `none` runs retrieval-only; any local server with the same format (for
+  example Ollama) also works. If the model is down, `/coach` returns 503 and the matcher
+  keeps working.
+- **Not built** (cuttable in the PRD): reranker, conversation memory, hybrid (BM25) search.
 
-## Accounts, quotas, feedback and monitoring (Phase 3)
+## Accounts, quotas, feedback and monitoring
 
-- **Accounts (F11).** Firebase Authentication does sign-up and sign-in, with Google or
-  with email and password, and issues a one-hour ID token that the UI refreshes. The
-  API checks each token with PyJWT: RS256 signature from Google's published Firebase
-  keys (cached), audience and issuer for this project, expiry, and sign-in time
-  (`app/core/security.py`). The ResumeFit account is created at `POST /auth/register`
-  only with `consent: true`, and the consent time is saved on the user row. Admin
-  rights need an email in `RESUMEFIT_ADMIN_EMAILS` that Firebase marks as verified, so
-  nobody can claim an admin's address by signing up with it unverified. Deleting the
-  account needs a sign-in less than 5 minutes old.
-- **Isolation (F12).** Every analysis, coach and feedback lookup goes through one
-  ownership check on `user_id`; `tests/test_api_isolation.py` tries every such route as a
-  second user. Analyses made before accounts existed have no owner and are visible to
-  nobody; the 30-day retention job removes them.
-- **Quotas (F13).** 20 analyses and 50 coach questions per user per UTC day by default
-  (`RESUMEFIT_QUOTA_*`). Only successful requests count: a rejected upload or a coach
-  call that fails because the model is down does not use the allowance.
-- **Feedback (F14).** A 1-5 rating and an optional comment on an analysis or a coach
-  answer, saved with that item's model version. Rating the same item again updates it.
-  Deleting the analysis keeps the rating for the trend but removes its link and comment.
-- **Admin metrics (F15).** `GET /admin/metrics` and the Admin tab in the UI, for emails
-  listed in `RESUMEFIT_ADMIN_EMAILS`: request counts by endpoint, p50/p95 latency of
-  successful `/analyze`, `/coach` and `/jd/extract` calls, server and client error rates,
-  quota hits per day, active users and top users (by pseudonymous id, no emails), the
-  score distribution and share of resumes with missing sections, and the rating trend.
-  Each request is recorded by route template (`/analyses/{analysis_id}`), status and
-  latency only.
-- **Drift check.** Each score is also written to an anonymous `score_events` table. The
-  admin page compares the latest 7 days with the first 7 days of scores and flags a mean
-  shift above 10 points or a two-sample KS test p-value below 0.01, needing at least 20
-  scores in each week. It also flags an average rating below 3.5 (from 5 ratings up) and
-  a server error rate above 1%. All thresholds are starting values in `.env`.
+- **Accounts.** Firebase issues a one-hour ID token that the site refreshes. The API checks
+  each token's RS256 signature against Google's published keys (cached), plus audience,
+  issuer, expiry and sign-in time (`app/core/security.py`). The ResumeFit account is
+  created only with `consent: true`, and the consent time is stored. Admin rights need an
+  email in `RESUMEFIT_ADMIN_EMAILS` that Firebase marks as verified. Deleting the account
+  needs a sign-in under 5 minutes old.
+- **Isolation.** Every analysis, coach and feedback lookup goes through one ownership check;
+  `tests/test_api_isolation.py` tries every such route as a second user.
+- **Quotas.** 20 analyses and 50 coach questions per user per UTC day by default. Only
+  successful requests count.
+- **Feedback.** A 1–5 rating and optional comment on an analysis or coach answer, saved
+  with that item's model version. Rating again updates it.
+- **Admin metrics.** Request counts by endpoint, p50/p95 latency of successful `/analyze`,
+  `/coach` and `/jd/extract` calls, error rates, quota hits per day, active and top users
+  (pseudonymous ids, never emails), the score distribution and the rating trend.
+- **Drift check.** Every score also goes to an anonymous `score_events` table. The admin
+  page compares the latest week with the first and flags a mean shift above 10 points or a
+  two-sample KS test p-value below 0.01 (at least 20 scores a week), an average rating
+  below 3.5, and a server error rate above 1%.
 
-**Privacy and safety controls**
+### Privacy and safety
 
 - File type is decided by content signature. Encrypted PDFs, `.docm`, legacy `.doc`,
   oversized files, too many pages and zip bombs are rejected with a readable message.
 - Uploads are parsed in memory and never written to disk.
-- The full resume text is not stored unless `store_resume_text=true`. The JD text is
-  stored. Since Phase 2, **redacted resume passages are stored** for the coach (header
-  dropped; email, phone, links, name and address lines removed) and are deleted with the
-  analysis. Tell your testers this.
-- Only redacted passages and a redacted question are sent to a language model. **Third-party
-  model provider: Google, Gemini API free tier** (`gemini-3.5-flash-lite`, since 17 Nov
-  2026, chosen by the owner for speed). Under the free tier's terms Google may use this
-  text to improve its products and people at Google may read it; the sign-up privacy note
-  and the web front end's Privacy page say so (`COACH_PROVIDER` in `web/config.js`). Before
-  that the coach ran qwen2.5:3b locally in Ollama with no text leaving the machine; set
-  `RESUMEFIT_LLM_*` back to that to return to it. The Streamlit UI's privacy note does not
-  name the provider; it shows the model in use.
-- Coach questions are stored redacted; logs carry the answer status and counts, never the
-  question, answer or passage text.
-- The resume header (name, contact details, address) is excluded from scoring, and email,
-  phone and links are redacted from the rest. A test checks that changing only the name
+- The full resume text is stored only if the user ticks the box for that analysis. The JD
+  is stored. **Redacted resume passages are stored** for the coach (header dropped;
+  email, phone, links, name and address lines removed) and are deleted with the analysis.
+- **Third-party model provider: Google (Gemini API, free tier).** Only redacted passages
+  and a redacted question are sent. Under the free tier's terms Google may use this text
+  to improve its products and people at Google may read it; the sign-up note and the
+  site's Privacy page say so.
+- Coach questions and feedback comments are stored redacted. Logs are JSON with a request
+  id and metadata only (status, latency, score, band, model version, error code); tests
+  check that no resume or JD text and no email reaches the log.
+- The resume header is excluded from scoring; a test checks that changing only the name
   and contact details leaves the score unchanged.
-- Logs are JSON with a request id and metadata only (status, latency, score, band,
-  model version, error code). A test checks that no resume or JD text reaches the log.
 - Analyses older than 30 days are deleted at startup, with their passages and coach
-  messages; request metrics and usage rows older than that go too.
-- **Sign-in data sits with Firebase (Google)**: the email and either a password hash or
-  the Google identity. ResumeFit stores the Firebase user id, the email and the consent
-  time; it never sees passwords. `DELETE /auth/me` (after a fresh sign-in) deletes the
-  account with every analysis, passage, coach message, rating and usage row linked to
-  it, in one transaction, and the UI then deletes the Firebase user with the same token.
-- Kept after deletion, because they hold nothing that identifies anyone: anonymous score
-  events (score, band, count of missing sections, model version, time) for the drift
-  check, and request metrics (route, status, latency, time).
-- Feedback comments are redacted like coach questions. The admin page shows user ids,
-  never emails, and logs never carry emails (tested).
+  messages.
+- Firebase holds the email and a password hash or Google identity; ResumeFit stores the
+  Firebase user id, the email and the consent time, and never sees passwords.
+  `DELETE /auth/me` deletes everything linked to the user in one transaction, and the site
+  then deletes the Firebase user.
+- Kept after deletion because they identify no one: anonymous score events and request
+  metrics (route, status, latency, time).
 
 ## Evaluation
 
-`eval/evaluate.py` compares the matcher with the keyword-overlap baseline on labelled
-pairs (band agreement and Spearman correlation). Copy `eval/labels_template.csv` to
-`eval/labels.csv`, put files under `eval/data/` (both are git-ignored), then:
+| Metric | Target (PRD) | Measured |
+| --- | --- | --- |
+| Test coverage of `app/` | ≥ 80% | **96%**, 229 tests, hashing embedder, 19 Nov 2026 |
+| `/analyze` p95, 2-page resume | < 3 s | **642 ms** one at a time (p50 488 ms, 20 requests); **1549 ms** at concurrency 4 (p50 1113 ms, 30 requests); 0 failures. Laptop CPU, ONNX backend, 19 Nov 2026. Earlier, with PyTorch on 17 Nov: p95 767 ms and 2019 ms on a different fake 2-page resume |
+| Coach retrieval hit rate at 5 (answerable questions) | none set | **100% (20/20)**; 55% (11/20) before the passage-size and reserved-slot change |
+| Coach refusal accuracy (all 30 questions) | none set | **100% (30/30)** |
+| Coach answers that cite a retrieved passage | ≥ 90% | **100% (20/20)**, gemini-3.5-flash-lite, coach 0.3.0 |
+| Coach answers judged faithful to their sources | ≥ 85% | **19/20**, judged by Claude (the coding assistant) reading each answer against its passages, not yet by the owner |
+| Coach answer p95 latency | < 8 s | **8.2 s** and **8.4 s** in two runs of the draft set (p50 1.5 s and 6.4 s), just above target. In the load test, p95 2.3 s one at a time for the calls that succeeded |
+| Band agreement with human labels, held-out pairs | ≥ 70% | not measured |
+| Gain over the keyword baseline | ≥ 10 points | not measured |
 
-```powershell
-python -m eval.evaluate eval/labels.csv --split test
-```
+The coach numbers come from `eval/coach_eval.py`: a 30-question draft set in
+`eval/coach_questions.json` (10 about the resume, 10 about the JD, 10 out of scope or
+adversarial) against the fake sample resume and JD in `eval/samples/`. Twenty answerable
+questions about one fake resume is a small set: treat the numbers as evidence that the
+pipeline works, and repeat them on real, consenting users' questions before relying on them.
 
-`eval/coach_eval.py` runs the 30-question set in `eval/coach_questions.json` (10 about the
-resume, 10 about the JD, 10 out of scope or adversarial) against the fake sample resume and
-JD in `eval/samples/`. It prints retrieval hit rate at 5, refusal accuracy and citation
-rate, and writes a CSV with each answer beside the same model's answer without retrieval,
-for the manual faithfulness check. The question set is a draft: review every question and
-gold passage before reporting numbers.
+**Load test notes.** `eval/load_test.py` sends `/analyze` and `/coach` requests from a
+thread pool and prints p50 and p95. In the 19 Nov run, 17 of 50 coach calls returned 503
+`llm_unavailable` because the Gemini free tier refused bursts of concurrent calls; the API
+returned its standard error and every analysis still succeeded. The numbers are from a
+laptop, not from the free Render instance, which has far less CPU.
 
 ```powershell
 python -m eval.coach_eval --out eval/coach_answers.csv
-```
-
-`eval/load_test.py` sends `/analyze` and `/coach` requests to a running API with a thread
-pool and prints p50 and p95 latency. It needs only `requests`, so Locust is not required.
-
-```powershell
 python -m eval.load_test --resume resume.pdf --jd jd.txt --requests 30 --concurrency 4
+python -m eval.evaluate eval/labels.csv --split test   # needs labelled pairs in eval/data/
 ```
 
-| Metric | Target (PRD) | Measured |
-| --- | --- | --- |
-| Coach retrieval hit rate at 5, answerable questions (draft set, fake sample data) | none set | 100% (20/20), real embedding model, retrieval-only, threshold 0.25, 17 Nov 2026. It was 55% (11/20) before the passage-size and reserved-slot change described above |
-| Coach refusal accuracy, all 30 draft questions | none set | 100% (30/30), same run |
-| Coach answers that cite a source passage | ≥ 90% | 85% (17/20), qwen2.5:3b local, coach 0.3.0, 17 Nov 2026. **Below target** |
-| Coach answers judged faithful (manual) | ≥ 85% | 76% (13 of the 17 shown answers), same run, checked by hand against the cited passages. **Below target** |
-| Coach answer p95 latency | < 8 s | qwen2.5:3b on a laptop CPU, one question at a time: p50 17.9 s, p95 39.8 s. **Above target.** Retrieval-only: p95 34 ms at concurrency 1, 160 ms at concurrency 4 |
-| Band agreement with human labels, held-out pairs | ≥ 70% | not measured |
-| Gain over keyword baseline | ≥ 10 points | not measured |
-| `/analyze` p95 latency, 2-page resume | < 3 s | fake 2-page resume, laptop CPU, 17 Nov 2026: p50 720 ms and p95 767 ms at concurrency 1 (20 requests); p50 1692 ms and p95 2019 ms at concurrency 4 (30 requests). Measured end to end from the client, after one warm-up call |
-| Test coverage, core modules | ≥ 80% | 97% of `app/` lines (118 tests, hashing embedder, 17 Nov 2026) |
+### Choosing the coach model
 
-Fill this table only with numbers you have run.
-
-**How the hit rate went from 55% to 100%.** With 180-word passages the resume was 4 passages
-(one per section) and the JD a single passage, against 24 guidance passages. For the 9
-misses the gold resume or JD passage ranked 6th to 25th behind longer guidance passages on
-the same topic. The retrieval floor was not the lever: `top_k` cuts first, and the plain
-off-topic questions scored at most 0.18 against any passage. Chunking the resume and JD at
-25 words gave 18/20 on its own, and the reserved slot for the best resume and JD passage
-gave 20/20. Twenty questions on one fake resume is a small set, so treat this as a sanity
-check rather than a result; the question set itself was reviewed on 17 Nov 2026 and every
-gold passage exists in the sources.
-
-### Choosing the coach model (17 Nov 2026)
-
-The constraint was a laptop with an Intel i7-1355U CPU, 16 GB RAM, no usable GPU and no
-hosted-model API key, so the candidates were small open models running locally in Ollama.
-All runs used the 30-question draft set, the real embedding model and retrieval with the
-reserved resume and JD slots. Faithfulness was judged by hand against the cited passages.
+The first constraint was a laptop with no usable GPU and no API key, so small open models
+ran locally in Ollama. All runs used the same 30-question set, and faithfulness for the
+local models was judged by hand.
 
 | Model, coach version | Cited answers | Faithful, of those shown | p50 / p95 latency |
 | --- | --- | --- | --- |
-| qwen2.5:3b, 0.2.0 | 19/20 | 15/19 | 16.5 s / 37.0 s |
 | llama3.2:3b, 0.2.0 | 18/20 | 11/18 | 18.4 s / 27.9 s |
 | qwen2.5:1.5b, 0.3.0 with extra prompt rules | 5/20 | not checked | 6.8 s / 18.0 s |
-| qwen2.5:3b, 0.3.0 with extra prompt rules | 15/20 | 10/15 | 18.1 s / 37.0 s |
-| **qwen2.5:3b, 0.3.0 (chosen)** | **17/20** | **13/17** | **17.9 s / 39.8 s** |
+| qwen2.5:3b, 0.3.0 | 17/20 | 13/17 | 17.9 s / 39.8 s |
+| **gemini-3.5-flash-lite (hosted), 0.3.0** | **20/20** | **19/20** (Claude's reading) | **1.5 s / 8.2 s** |
 
-All five runs kept 100% retrieval hit rate and 100% refusal accuracy. qwen2.5:3b is the
-best of these and is the configured model. llama3.2:3b invented facts, such as listing
-SQLite as a database the student used. qwen2.5:1.5b mostly failed to cite. Two extra prompt
-rules, which said guidance examples are not the student's work and that "not in the
-sources" is only for unanswerable questions, made qwen2.5:3b worse, so they were removed.
-
-Coach 0.3.0 tightens the groundedness check. An answer that cites an id outside the R/J/G
-scheme, such as `[Q1]`, is rejected. So is an answer that says "not in the sources" while
-citing a passage. Both happened with qwen2.5:3b, and both are now shown as passages only.
-
-The remaining failure is the one that matters most for students. The model sometimes turns
-a guidance example into a suggestion that the student claim it, including a "120 ms"
-figure nobody measured. No local model here meets the PRD's citation, faithfulness or
-latency targets. The likely way to meet them is a larger hosted model, which needs an API
-key, a cost decision and a privacy note naming the provider. Until then, treat generated
-coach answers as drafts and read the cited passages.
-
-**Switched to a hosted model (17 Nov 2026, evening).** The owner chose Google's Gemini API
-free tier for speed. It plugs into the existing `openai-compatible` client with
-`RESUMEFIT_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai`. The
-larger Flash models (`gemini-3.8-flash`, `gemini-3.5-flash`, `gemini-flash-latest`)
-answered 503 "high demand" on the free tier when tried, and `gemini-2.5-flash` is closed
-to new users, so the pinned `gemini-3.5-flash-lite` is configured, with a 20 s timeout.
-Same 30-question draft set, coach 0.3.0:
-
-| Model | Cited answers | Faithful, of those shown | p50 / p95 latency |
-| --- | --- | --- | --- |
-| qwen2.5:3b, local (before) | 17/20 | 13/17 | 17.9 s / 39.8 s |
-| **gemini-3.5-flash-lite, hosted (now)** | **20/20** | **19/20** | **1.5 s / 8.2 s** |
-
-Retrieval hit rate and refusal accuracy stayed at 100%. The faithfulness column for Gemini
-was judged by Claude (the coding assistant), not by the owner: one answer turned the
-guide's example bullet into a suggested line with details the resume passage does not
-have. Another repeated the guide's "120 ms" example but added "using only numbers you
-actually measure". Recheck by hand before quoting these numbers. The free tier has rate
-limits; when the model is overloaded or limited, `/coach` returns 503 and the matcher keeps
-working.
+The local models missed the PRD's citation, faithfulness and latency targets; llama3.2:3b
+invented facts, and qwen2.5:1.5b rarely cited. Two extra prompt rules made qwen2.5:3b worse
+and were removed. The hosted model was chosen for speed, with the privacy trade-off above.
+The larger Gemini Flash models returned 503 "high demand" on the free tier when tried, so
+the pinned Flash-Lite model is used.
 
 ## Known limits
 
-- The Google sign-in component and the UI's sign-in screens have not been clicked
-  through in a browser yet; the API side was run against the real project. A popup blocked by the browser, Google sign-in not enabled in
-  the console, or an unauthorised domain each show a message in the UI.
-- Email verification is offered but not required, except for admin rights. Firebase's
-  own limits are the only guard against repeated sign-in attempts.
-- A Firebase ID token stays valid until it expires (up to an hour) even after signing
-  out; revoking sessions early needs the Firebase Admin SDK, which this project avoids.
-- If the UI cannot delete the Firebase user after the ResumeFit data is deleted, the
-  Firebase user remains with no data; signing in again asks for consent to a new,
-  empty account.
-- Quota counting is checked before the work and counted after it, so two requests racing
-  at the exact limit can both succeed. Quota days are UTC (05:30 in India).
-- The drift baseline is the first week of scores ever recorded. After a deliberate model
-  or threshold change, the page notes the version change; clear `score_events` to start a
-  new baseline.
-- The coach's retrieval threshold, prompt and scope rules are untested against a real
-  model. The scope rules are keyword patterns and will miss rephrased requests.
-- Analyses created before Phase 2 have no stored passages; the coach answers those from
-  the guidance library only. Re-run the analysis to fix that.
-- Re-ingesting the guidance corpus (after editing a file or changing the embedding model)
-  renumbers guidance passages, so citation ids saved with older coach messages go stale.
-- Skills outside the curated list are invisible to `S_skill` (the semantic part still
-  sees them). Bare "Go" is not matched, to avoid false hits on the verb; "Golang" is.
-- Section detection relies on common headings. A resume with unusual headings is scored
-  as one block and the report says so. Two-column PDF layouts may extract out of order.
-- Name and address redaction are heuristics based on the resume header.
-- English text only; scanned PDFs are rejected.
-- The retention job runs at startup only; a long-running deployment needs a scheduled run.
-- Tables are created directly at startup. Phases 2 and 3 only added tables, so this
-  upgrades an existing database in place. Move to Alembic migrations before the first
-  change to an existing table, or before moving to PostgreSQL.
+- Automated tests cover email sign-in only; Google sign-in needs a real Google account. The
+  owner used the live site and reported it working (17 Nov 2026).
+- Weights and band thresholds are untuned. Skills outside the curated list are invisible
+  to `S_skill` (the semantic part still sees them). Bare "Go" is not matched, to avoid the
+  verb; "Golang" is.
+- The coach's scope rules are keyword patterns and will miss rephrased requests. Its
+  retrieval settings were chosen on a small fake draft set.
+- The Gemini free tier rate-limits bursts of coach questions (503 to the user). The
+  Render free plan sleeps when idle.
+- Section detection relies on common headings; unusual ones are scored as one block, and
+  the report says so. Two-column PDFs may extract out of order. Name and address redaction
+  are heuristics. English only; scanned PDFs are rejected.
+- A Firebase ID token stays valid until it expires (up to an hour) after signing out.
+  Quota checks can let two racing requests through at the exact limit. Quota days are UTC.
+- The retention job runs at startup. Tables are created at startup; move to Alembic
+  migrations before the first change to an existing table.
+- Re-ingesting the guidance corpus renumbers its passages, so citation ids saved with
+  older coach messages go stale.
 
 ## Next steps
 
-1. Decide whether to use a hosted model for the coach to meet the citation, faithfulness
-   and latency targets; the local qwen2.5:3b misses all three on this laptop.
-2. Restart Windows to finish the WSL 2 install, start Docker Desktop, and run
-   `docker build -t resumefit .`.
-3. Add questions from real, consenting users to `eval/coach_questions.json` and rerun the
-   coach evaluation; the current numbers are on 20 questions about one fake resume.
-4. Still open from Phase 1: labelled resume and JD pairs and threshold tuning.
-5. Try Google and email sign-in in the UI in a browser, then open the Admin tab with
-   your verified email in `RESUMEFIT_ADMIN_EMAILS`.
-6. Rerun the load test, which now signs in through Firebase, with raised quotas.
+1. Collect labelled resume and job pairs from consenting people, measure band agreement
+   and the gain over the keyword baseline, then tune the weights and thresholds.
+2. Add real coach questions and review faithfulness by hand.
+3. Set an admin email in Render (`RESUMEFIT_ADMIN_EMAILS`) and check the Admin page with
+   real traffic.
+4. Move to Alembic migrations and schedule the retention job.

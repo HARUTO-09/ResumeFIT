@@ -4,11 +4,15 @@ ResumeFit scores a resume against a job description and explains the gaps. The P
 three phases: 1 Matcher MVP, 2 RAG coach, 3 SaaS-lite (accounts, quotas, admin metrics).
 All three are written. README.md has the architecture, API table and known limits.
 
-## Current state (17 Nov 2026, evening)
+## Current state (19 Nov 2026)
 
-- `.venv` exists (Python 3.14, torch 2.15 CPU). Git is at `C:\Program Files\Git\cmd`
-  (prepend it to PATH in a shell opened before 16 Nov).
-- `pytest --cov=app` passes (118 tests, 97% coverage); `ruff check` and
+- Live on free tiers: site `https://resumefit-web.vercel.app`, API on Render, Neon
+  Postgres, Firebase, Gemini coach (details in "Web front end and free hosting" below).
+- README was rewritten on 19 Nov as a public project README with a "Results at a glance"
+  table of measured numbers. Keep every number there measured and dated.
+- `.venv` exists (Python 3.14; embeddings through onnxruntime, torch no longer needed).
+  Git is at `C:\Program Files\Git\cmd` (prepend it to PATH in a shell opened before 16 Nov).
+- `pytest --cov=app` passes (229 tests, 96% coverage, 19 Nov); `ruff check` and
   `ruff format --check` are clean. Run both before every commit.
 - Remote `origin` is `https://github.com/HARUTO-09/ResumeFIT.git`, branch `main`. CI
   (lint, tests with an 80% coverage gate, Docker build on the runner) was green on the
@@ -26,22 +30,19 @@ All three are written. README.md has the architecture, API table and known limit
   slot for the best resume and JD passage. Hit rate at 5 on the draft set is 20/20.
 - Guardrail (coach 0.3.0): answers citing an id outside R/J/G (e.g. `[Q1]`) or saying
   "not in the sources" while citing a passage are rejected and shown as passages only.
-- Language model: local qwen2.5:3b through Ollama (`%LOCALAPPDATA%\Programs\Ollama`),
-  configured in `.env` with a 60 s timeout. Ollama must be running for `/coach`; if it is
-  not, `/coach` returns 503 and the matcher keeps working. Nothing leaves the machine.
-- Chosen over llama3.2:3b and qwen2.5:1.5b; README "Choosing the coach model" has the
-  table. qwen2.5:3b still misses the PRD targets: 17/20 cited, 13/17 faithful by hand,
-  p95 39.8 s. Two prompt rules tried on 17 Nov made it worse and were removed.
+- Language model: Gemini (see below). Before 17 Nov evening it was local qwen2.5:3b
+  through Ollama (17/20 cited, 13/17 faithful by hand, p95 39.8 s); README "Choosing the
+  coach model" has the table.
 - Eval answer CSVs are untracked (`eval/coach_answers.csv` and copies in the scratchpad).
-- `eval/load_test.py` measured `/analyze` p95 767 ms (concurrency 1) and 2019 ms
-  (concurrency 4) on a fake 2-page resume.
+- `eval/load_test.py`, 19 Nov, ONNX backend, laptop, fake 2-page resume (scratchpad
+  `make_two_page_resume.py`): `/analyze` p50 488 / p95 642 ms at concurrency 1 (20 req),
+  p50 1113 / p95 1549 ms at concurrency 4 (30 req), 0 failures. 17 of 50 coach calls got
+  503 from Gemini free-tier rate limits. (17 Nov, torch: p95 767 and 2019 ms.)
 
 ## Docker
 
-- Docker Desktop 4.99 was installed on 17 Nov 2026. Its engine failed with "Virtual
-  Machine Platform not enabled", so `wsl --install --no-distribution` was run elevated.
-  A Windows restart is needed before Docker can start; then run `docker build -t
-  resumefit .` and record the result in README.
+- The image builds in CI (76 s without torch) and runs on Render. Local Docker Desktop
+  still needs a Windows restart (WSL 2); a local build is optional now.
 
 ## Phase 3 added on 17 Nov 2026 (written outside this machine, API not yet run here)
 
@@ -116,13 +117,12 @@ All three are written. README.md has the architecture, API table and known limit
 
 1. Done 17 Nov: requirements installed, 218 tests pass, ruff clean. Keep the isolation,
    token and privacy tests as strict as written.
-2. API flow done against the real project (see above). Still to do: the owner clicks
-   through Google and email sign-in, consent, ratings and deletion in the UI in a
-   browser. Update README Status with what was actually run.
-3. Ask the owner which email to put in `RESUMEFIT_ADMIN_EMAILS`, then check the Admin tab.
-4. Rerun `eval/load_test.py` with raised quotas and compare with the 17 Nov numbers.
-5. Still open: Docker build after the Windows restart, hosted-model decision for the coach,
-   labelled pairs and real coach questions.
+2. Done 17 Nov: the owner used the live site and reported everything working.
+3. Admin email: the owner said "none" for now. Set `RESUMEFIT_ADMIN_EMAILS` in Render
+   when they give one, then check the Admin page.
+4. Done 19 Nov: load test rerun (see Coach section).
+5. Still open: labelled pairs and threshold tuning, real coach questions and the owner's
+   own faithfulness review, Alembic migrations.
 
 Stop and ask the owner before: deploying, sending any text to a third-party model,
 switching the coach to a hosted provider, creating or deleting Firebase users other
